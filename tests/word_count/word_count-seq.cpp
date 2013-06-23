@@ -1,5 +1,6 @@
-/*
+/**
  * Author: Michael Sevilla
+ * Edited by msevilla for a scale-up vs. scale-out study.
  */
 #include <sys/mman.h>
 #include <sys/stat.h>

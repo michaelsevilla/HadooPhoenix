@@ -1,3 +1,8 @@
+/**
+ * Edited by msevilla for a scale-up vs. scale-out study.
+ */
+
+
 /* Copyright (c) 2007-2011, Stanford University
 * All rights reserved.
 *
