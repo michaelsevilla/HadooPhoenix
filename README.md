@@ -22,4 +22,3 @@ Files
 - ./dmtcp:	tool for achieving fault tolerance with checkpointing 
 
 [done]
-[done]
