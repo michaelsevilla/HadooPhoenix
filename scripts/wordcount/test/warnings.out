@@ -1,6 +1,0 @@
-warning: could not check that the binary file /lib/modules/2.6.32-358.el6.x86_64/kernel/drivers/cpufreq/cpufreq_ondemand.ko has not been modified since the profile was taken. Results may be inaccurate.
-warning: could not check that the binary file /lib/modules/2.6.32-358.el6.x86_64/kernel/fs/ext4/ext4.ko has not been modified since the profile was taken. Results may be inaccurate.
-warning: could not check that the binary file /lib/modules/2.6.32-358.el6.x86_64/kernel/fs/jbd2/jbd2.ko has not been modified since the profile was taken. Results may be inaccurate.
-warning: could not check that the binary file /lib/modules/2.6.32-358.el6.x86_64/kernel/drivers/scsi/libsas/libsas.ko has not been modified since the profile was taken. Results may be inaccurate.
-warning: could not check that the binary file /lib/modules/2.6.32-358.el6.x86_64/kernel/arch/x86/kernel/cpu/cpufreq/mperf.ko has not been modified since the profile was taken. Results may be inaccurate.
-warning: could not check that the binary file /lib/modules/2.6.32-358.el6.x86_64/kernel/arch/x86/oprofile/oprofile.ko has not been modified since the profile was taken. Results may be inaccurate.

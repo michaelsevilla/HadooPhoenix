@@ -10,3 +10,12 @@ on a scale-up system. It also includes sequential, 'dumbest thing possible'
 implementations to ensure that we compare scaling architectures, not the
 applications themselves. We implement Hadoop algorithms using the Phoenix++
 API/runtime.
+
+Files
+- ./README.md	this file  
+- ./phoenix++:	scale-out programs on scale-up  
+	- edited files: sort, wordcount, kmeans  
+- ./scripts:	scripts for running scalability tests  
+- ./graphs: 	scripts that prepare output for gnuplot   
+- ./dmtcp:	tool for achieving fault tolerance with checkpointing  
+
