@@ -21,4 +21,4 @@ Files
 - ./graphs: 	scripts that prepare output for gnuplot   
 - ./dmtcp:	tool for achieving fault tolerance with checkpointing 
 
-Edited on ike
+[done]
