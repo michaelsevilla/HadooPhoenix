@@ -1,10 +1,9 @@
 HadooPhoenix
 ============
 
-HadooPhoenix README
-
-Author: Michael Sevilla
-Date: 6-22-2013
+Author: Michael Sevilla  
+Date: 6-22-2013  
+README
 
 HadooPhoneix is a series of programs that implement scale-out algorithms
 on a scale-up system. It also includes sequential, 'dumbest thing possible'
