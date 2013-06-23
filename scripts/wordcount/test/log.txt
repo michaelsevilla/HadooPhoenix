@@ -1,0 +1,28 @@
+-- deleted ./test/*
+-- created ./test/{images, symbols, timings, sar}
+
+--------------------------------------------------
+-- word_count iteration 240 (1073741824 x 240 = )
+--------------------------------------------------
+Input size:  -rw-r--r--. 1 msevilla msevilla 1.1G Jun 10 04:57 /data1/Data/randomtextwriter-input/input
+-- starting OProfile...
+-- running benchmark...
+Wordcount: Running...
+Wordcount: Calling MapReduce Scheduler Wordcount
+Wordcount: MapReduce Completed
+
+Wordcount: Results (TOP 10 of 52030):
+              G - 469613
+      KERYKEION - 100453
+           GALA - 100388
+       SAPIENCE - 100374
+     DETRACTIVE - 100369
+       BIVENTER - 100367
+     SUBFEBRILE - 100338
+     OXYTERPENE - 100333
+      ORGIASTIC - 100244
+       CIRCULAR - 100242
+Total: 101609209
+-- dumping OProfile report...
+
+run.sh completed successfully (apparently) and is done!

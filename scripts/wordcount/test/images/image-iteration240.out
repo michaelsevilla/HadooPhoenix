@@ -1,0 +1,27 @@
+CPU: Intel Sandy Bridge microarchitecture, speed 2.201e+06 MHz (estimated)
+Counted CPU_CLK_UNHALTED events (Clock cycles when not halted) with a unit mask of 0x00 (No unit mask) count 500000
+Counted l1d events (L1D cache events) with a unit mask of 0x01 (replacement L1D Data line replacements.) count 2000000
+CPU_CLK_UNHALT...|      l1d:2000000|
+  samples|      %|  samples|      %|
+------------------------------------
+    47782 53.2901        83 55.3333 word_count
+    41652 46.4534        67 44.6667 libc-2.12.so
+       42  0.0468         0       0 oprofiled
+       36  0.0401         0       0 oprofile
+       34  0.0379         0       0 ext4
+       29  0.0323         0       0 bash
+       25  0.0279         0       0 ld-2.12.so
+       20  0.0223         0       0 jbd2
+        8  0.0089         0       0 cp
+        7  0.0078         0       0 cpufreq_ondemand
+        5  0.0056         0       0 ophelp
+        5  0.0056         0       0 libstdc++.so.6.0.13
+        4  0.0045         0       0 libpthread-2.12.so
+        3  0.0033         0       0 gawk
+        3  0.0033         0       0 mperf
+        2  0.0022         0       0 libm-2.12.so
+        2  0.0022         0       0 rsyslogd
+        2  0.0022         0       0 sudoers.so
+        1  0.0011         0       0 grep
+        1  0.0011         0       0 libtinfo.so.5.7
+        1  0.0011         0       0 libsas
