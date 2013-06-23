@@ -3,6 +3,8 @@ HadooPhoenix
 
 Author: Michael Sevilla  
 Date: 6-22-2013  
+Institution: UC Santa Cruz  
+Email: msevilla@ucsc.edu  
 README
 
 HadooPhoneix is a series of programs that implement scale-out algorithms
@@ -17,7 +19,6 @@ Files
 	- edited files: sort, wordcount, kmeans  
 - ./scripts:	scripts for running scalability tests  
 - ./graphs: 	scripts that prepare output for gnuplot   
-- ./dmtcp:	tool for achieving fault tolerance with checkpointing  
+- ./dmtcp:	tool for achieving fault tolerance with checkpointing 
 
 Edited on Ike Nassi
-Edited agian on Ike Nassi
