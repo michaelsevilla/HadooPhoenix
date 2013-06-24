@@ -19,3 +19,4 @@ Files
 - ./graphs: 	scripts that prepare output for gnuplot   
 - ./dmtcp:	tool for achieving fault tolerance with checkpointing  
 
+Fixed the hotfix
