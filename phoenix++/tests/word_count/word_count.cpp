@@ -1,6 +1,5 @@
 /**
  * Edited by msevilla for a scale-up vs. scale-out study.
- * Changing on Ike Nassi
  */
 
 
