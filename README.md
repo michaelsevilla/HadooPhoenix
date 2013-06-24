@@ -12,7 +12,7 @@ applications themselves. We implement Hadoop algorithms using the Phoenix++
 API/runtime.
 
 Files
-- ./README.md	this file  
+- ./README.md: 	this file  
 - ./phoenix++:	scale-out programs on scale-up  
 	- edited files: sort, wordcount, kmeans  
 - ./scripts:	scripts for running scalability tests  
