@@ -169,7 +169,7 @@ public:
     }
 };
 
-//#define NO_MMAP
+#define NO_MMAP
 
 int main(int argc, char *argv[]) 
 {
