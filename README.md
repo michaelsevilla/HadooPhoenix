@@ -20,6 +20,3 @@ Files
 - ./scripts:	scripts for running scalability tests  
 - ./graphs: 	scripts that prepare output for gnuplot   
 - ./dmtcp:	tool for achieving fault tolerance with checkpointing 
-
-Edited on dexter
- 
