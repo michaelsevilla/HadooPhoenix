@@ -17,4 +17,7 @@ Files
 	- edited files: sort, wordcount, kmeans  
 - ./scripts:	scripts for running scalability tests  
 - ./graphs: 	scripts that prepare output for gnuplot   
-- ./dmtcp:	tool for achieving fault tolerance with checkpointing  
+- ./dmtcp:	tool for achieving fault tolerance with checkpointing 
+
+Edited on dexter
+ 
