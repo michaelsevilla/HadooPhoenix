@@ -185,7 +185,7 @@ int main(int argc, char *argv[])
     // Make sure a filename is specified
     if (argv[1] == NULL)
     {
-        printf("USAGE: %s <filename> [Top # of results to display]\n", argv[0]);
+        printf("MSEVILLA's WC USAGE: %s <filename> [Top # of results to display]\n", argv[0]);
         exit(1);
     }
 
