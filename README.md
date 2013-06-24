@@ -8,7 +8,7 @@ Email: msevilla@ucsc.edu
   
 HadooPhoenix is a collection of tools that implement scale-out algorithms on a scale-up system. The goal of this project is to compare the two most popular scaling architectures. The scale-out algorithms are modeled off the Hadoop implementatations and are implemented using Phoenix++. HadooPhoenix also includes sequential, 'dumbest thing possible' implementations. Using these two techniques, we cover a wide range of implementations, ensuring that we compare scaling architectures, not the applications themselves. A better introduction and references for all the tools and techniques we used can be found in the msevilla_masters_v0.pdf document in the ./docs folder of this distribution.
 	
-Files
+Files  
 *** Note - 'sop' stands for 'scale-out property' ***
 - ./README.md:            this file  
 - ./docs:                 supporting documentation with motivation, results, and references
