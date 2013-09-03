@@ -1,0 +1,40 @@
+[msevilla@dexter word_count]$ ./word_count /data2/Data/randomtextwriter-input_240GB 10 &
+[2] 4957
+[msevilla@dexter word_count]$ Wordcount: Running...
+date
+Sun Aug 11 01:35:51 PDT 2013
+[msevilla@dexter word_count]$  Wordcount: initialize : 786.070
+Wordcount: Calling MapReduce Scheduler Wordcount
+split phase : 0.044
+library init : 0.000
+map avg user time: 109.240    (105.248, 111.147)
+map avg thread time: 109.253    (105.263, 111.159)
+map phase : 111.160
+reduce avg user time: 0.000    (0.000, 0.000)
+reduce avg thread time: 0.016    (0.014, 0.016)
+reduce phase : 0.017
+merge avg thread time: 0.000    (0.000, 0.000)
+merge avg thread time: 0.000    (0.000, 0.000)
+merge avg thread time: 0.000    (0.000, 0.000)
+merge avg thread time: 0.001    (0.000, 0.001)
+merge avg thread time: 0.002    (0.002, 0.002)
+merge avg thread time: 0.002    (0.002, 0.002)
+merge phase : 0.007
+run time : 111.183
+Wordcount: library : 111.244
+Wordcount: MapReduce Completed
+
+Wordcount: Results (TOP 10 of 52149):
+             BY - 23227417
+             HU - 23223435
+           REDE - 23223422
+            EER - 23223200
+           MASA - 23222348
+            EDO - 23222146
+           CLOY - 23221922
+            TEN - 23221531
+           BRAG - 23220263
+            GUL - 23219280
+Total: 23846653158
+Wordcount: finalize : 0.644
+Wordcount: total : 897.958

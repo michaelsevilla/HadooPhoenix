@@ -1,0 +1,45 @@
+[msevilla@dexter word_count]$ /home/msevilla/dmtcp-trunk/bin/dmtcp_checkpoint --quiet --no-gzip --ckptdir /data2/Checkpoints/ --interval 600 ./word_count /data2/Data/randomtextwriter-input_240GB 10
+dmtcp_coordinator starting...
+    Port: 7999
+    Checkpoint Interval: 600
+    Exit on last client: 1
+Backgrounding...
+Wordcount: Running...
+
+
+
+Wordcount: initialize : 1519.517
+Wordcount: Calling MapReduce Scheduler Wordcount
+split phase : 23.879
+library init : 0.000
+map avg user time: 113.238    (110.655, 127.075)
+map avg thread time: 113.251    (110.669, 127.086)
+map phase : 127.088
+reduce avg user time: 0.000    (0.000, 0.000)
+reduce avg thread time: 0.063    (0.047, 0.075)
+reduce phase : 0.075
+merge avg thread time: 0.000    (0.000, 0.000)
+merge avg thread time: 0.000    (0.000, 0.000)
+merge avg thread time: 0.000    (0.000, 0.000)
+merge avg thread time: 0.001    (0.001, 0.001)
+merge avg thread time: 0.003    (0.003, 0.003)
+merge avg thread time: 0.003    (0.003, 0.003)
+merge phase : 0.009
+run time : 127.172
+Wordcount: library : 151.056
+Wordcount: MapReduce Completed
+
+Wordcount: Results (TOP 10 of 52149):
+             BY - 23227417
+             HU - 23223435
+           REDE - 23223422
+            EER - 23223200
+           MASA - 23222348
+            EDO - 23222146
+           CLOY - 23221922
+            TEN - 23221531
+           BRAG - 23220263
+            GUL - 23219280
+Total: 23846653158
+Wordcount: finalize : 2.533
+Wordcount: total : 1673.106
