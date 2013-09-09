@@ -40,7 +40,7 @@ DEBUG = -g
 #NUMA = -DNUMA_SUPPORT
 #CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing 
 # Edited by msevilla, support for openmp
-CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp
+CFLAGS = $(DEBUG) -pthread -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp
 LIBS = -lpthread -lrt
 endif
 

@@ -33,16 +33,17 @@ include $(HOME)/Defines.mk
 
 .PHONY: default all clean
 
-APPS := \
-        histogram \
-        linear_regression \
-        kmeans \
-	matrix_multiply \
-	pca \
-	string_match \
-        word_count \
-	sort \
-#
+APPS := ingest
+	#\
+        #histogram \
+        #linear_regression \
+        #kmeans \
+	#matrix_multiply \
+	#pca \
+	#string_match \
+        #word_count \
+	#sort \
+
 default: all
 
 all: 
