@@ -104,7 +104,6 @@ int thread_pool::begin()
 
     for (int i = 0; i < this->num_workers; ++i)
     {
-        printf("\t\t worker %d\n", i);
         int j = i * this->num_threads / num_workers;
         this->thread_args[j].sem_run.post();
     }

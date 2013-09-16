@@ -53,6 +53,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <string.h>
 
 #include <parallel/algorithm>
 
@@ -77,7 +78,6 @@ public:
         value_type val;
     };
 
-    virtual void run_map(data_type *data, uint64_t len);
 protected:
 
     // Parameters.
@@ -92,7 +92,10 @@ protected:
     
     uint64_t num_map_tasks;
     uint64_t num_reduce_tasks;
+    int fd;
+    char *fdata;
 
+    virtual void run_map(data_type *data, uint64_t len);
     virtual void run_reduce();
     virtual void run_merge();
     
@@ -129,7 +132,21 @@ protected:
     void start_workers (void (*callback)(void*, thread_loc const&), 
         int num_threads, char const* stage);    
 
-    
+    // Static member function can only modify static variables, so it has 
+    // no notion (nor does it require) an instance, i.e. "this"
+    static void *start(void *arg) {
+        // Run the mappers and get intermediate values
+        printf("Inside the MapReduce class\n");
+        thread_arg_t* t = (thread_arg_t*)arg;
+        
+        // Read the next 100 bytes
+        read(t->mr->fd, t->mr->fdata + INGEST_THRESHOLD, INGEST_THRESHOLD);
+        printf("start fdata: \n%s\n", t->mr->fdata);
+
+        t->mr->run_map((D *) t->mr->fdata, 1);
+        pthread_exit(NULL);
+    }
+
     // the default split function...
     int split(data_type &data, data_type &a) { return 0; }
 
@@ -194,8 +211,6 @@ public:
      */
     //int run(char *filename, uint64_t count, std::vector<keyval>& result);
     
-    // For the pthread function
-
     // This runs the splitter and counts the number of chunks.
     uint64_t get_nchunks (data_type *d);
 
@@ -206,6 +221,8 @@ public:
         key_type const& k, value_type const& v) const {
 	i[k].add(v);
     }
+
+
 };
 
 //template<typename Impl, typename D, typename K, typename V, class Container>
@@ -254,14 +271,11 @@ get_nchunks (data_type *d)
 
 /*
  * This function assumes that we are only going to get our input from a file.
- */
-/**
- * Added by msevilla
  *
  * Goal: start a thread to read while map tasks are reading (early start)
  *
  * Pseudo-code:
- *  run(fdata, filename, count, result)
+ *  run(filename, result)
  *      num map tasks = min(count - 1, num threads - 1) * 16
  *      num reduce tasks = num threads
  *      initialize container
@@ -270,21 +284,18 @@ get_nchunks (data_type *d)
  *      remaining -= nread
  *
  *      while remaining > 0
- *          initialize pthread reader
- *          run map(fdata + offset, nread)
- *          join
+ *          fork
+ *              parent runs mappers
+ *              child reads to threshold
  *          offset += nread
  *          remaining -= nread
  *
- *      run map(fdata, nread)
+ *      run mappers
  *
- *      run reduce
+ *      run reducers
  *
  * Caveats: this will break applications that don't use a file as input (e.g., kmeans)
  *
- * TODO: Check algorithm
- * TODO: Change to just read in file
- * TODO: Change to read in file with 1 thrad
  * TODO: Figure out if this can be limited to one core. hmmmm. :3
  **/
 
@@ -293,9 +304,8 @@ template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
 run (char *filename, std::vector<keyval>& result)
 {
-    int fd;
-    char *fdata = '\0';
-    uint64_t count;
+    uint64_t count = 10;
+    int nread;
     timespec begin;    
 
     // Initialize library
@@ -303,23 +313,16 @@ run (char *filename, std::vector<keyval>& result)
     get_time (begin);
 
     // One thread opens the file to start reading
-    printf ("\tfilename: %s\n", filename);
-    CHECK_ERROR ((fd = open(filename, O_RDONLY)) < 0)
-
-    // Read the first 100 characters
-    fdata = (char *) malloc(INGEST_THRESHOLD * sizeof(char));
-    memset(fdata, 0, INGEST_THRESHOLD);
-    read (fd, fdata, INGEST_THRESHOLD - 1);
-
-    count = get_nchunks((data_type *) fdata);
+    CHECK_ERROR ((this->fd = open(filename, O_RDONLY)) < 0)
+    printf ("\tfilename: %s; fd: %d\n", filename, this->fd);
 
     // Compute task counts (should make this more adjustable) and then 
     // allocate storage
     // Remove one thread so that we can continue reading data
     this->num_map_tasks = (std::min(count, this->num_threads) * 16) - 1;
     this->num_reduce_tasks = this->num_threads;
-    printf ("num_map_tasks = %lu\n", num_map_tasks);
-    printf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
+    printf("num_map_tasks = %lu\n", this->num_map_tasks);
+    printf("num_threads = %lu\n", this->num_threads);
 
     container.init(this->num_threads, this->num_reduce_tasks);
     this->final_vals = new std::vector<keyval>[this->num_threads];
@@ -330,40 +333,48 @@ run (char *filename, std::vector<keyval>& result)
     }
     print_time_elapsed("library init", begin);
 
-    // Run map tasks and get intermediate values
+    // Read the first 100 characters
+    this->fdata = (char *) malloc(2*INGEST_THRESHOLD * sizeof(char));
+    memset(fdata, 0, 2*INGEST_THRESHOLD);
+    nread = read(fd, this->fdata, INGEST_THRESHOLD);
+    printf("run fdata: \n%s\n", this->fdata);
+
+    // Create a thread to start mappers - it must be a thread because we have 
+    // to shared the malloc'd data. We must pass the MapReduce instance to the 
+    // thread
     get_time (begin);
+    pthread_t t1;
+    thread_arg_t th_arg = { this, 0, 0, 0};
+    pthread_create(&t1, NULL, &MapReduce::start, (void *) &th_arg);
 
-    //print_time_elapsed("map phase", begin);
-    //run_map((D *) fdata, 3);
-    int pid, status;
-    CHECK_ERROR( (pid = fork()) < 0);
-    if (pid == 0) {
-        printf("Hello, I am in the child\n");
-        printf("... exiting the child\n");
-        exit(EXIT_SUCCESS);
-    }
-    else {
-        printf("Hello, I am in the parent\n");
-        run_map((D *) fdata, count);
-        sleep(3);
-        wait(&status);
-        printf("... exiting the parent\n");
-    }
+    sleep(4);
+    printf("run fdata2: \n%s\n", this->fdata);
 
+    /* TODO:
+     *  - re-implement word count and verify it works
+     *  - make sure that it always gets spit to the same container
+     *  - start constructing loop (using nread, nremaining)
+     *  - find optimal chunk size to read (calculate a little)
+     *  - work on merge (mr for ingest)
+     */
+
+    //run_map((D *) fdata, count);
+
+    print_time_elapsed("map phase", begin);
     dprintf("In scheduler, all map tasks are done, now scheduling reduce tasks\n");
 
     // Run reduce tasks and get final values
     get_time (begin);
-    //run_reduce();
-    //print_time_elapsed("reduce phase", begin);
+    run_reduce();
+    print_time_elapsed("reduce phase", begin);
 
-    //dprintf("In scheduler, all reduce tasks are done, now scheduling merge tasks\n");
+    dprintf("In scheduler, all reduce tasks are done, now scheduling merge tasks\n");
 
-    //get_time (begin);
-    //run_merge();
-    //print_time_elapsed("merge phase", begin);
-    //
-    //result.swap(*this->final_vals);
+    get_time (begin);
+    run_merge();
+    print_time_elapsed("merge phase", begin);
+    
+    result.swap(*this->final_vals);
     
     // Delete structures
     delete [] this->final_vals;
@@ -375,6 +386,22 @@ run (char *filename, std::vector<keyval>& result)
     return 0;
 }
 
+//template<typename Impl, typename D, typename K, typename V, class Container>
+//void * MapReduce<Impl, D, K, V, Container>::
+//start(void *x) 
+//{
+//    printf("Inside the thread\n");
+//    //char *data = (char *) malloc(1000);
+//    //MapReduce mr;
+//    //memset(data, 0, 1000);
+//    //printf("Before calling run_map\n");
+//    //mr.run_map((D *) data, 10);
+//    printf("After calling run_map\n");
+//    pthread_exit(0);
+//}
+
+
+
 /**
  * Run map tasks and get intermediate values
  */
@@ -385,6 +412,8 @@ run_map (data_type *data, uint64_t count)
     // Compute map task chunk size
     uint64_t chunk_size = 
         std::max(1, (int)ceil((double)count / this->num_map_tasks));
+
+    printf("run_map: num_map_tasks = %lu\n", this->num_map_tasks);
     
     // Generate tasks by splitting input data and add to queue.
     for(uint64_t i = 0; i < this->num_map_tasks; i++)
@@ -404,7 +433,7 @@ run_map (data_type *data, uint64_t count)
         }
     }
     
-    printf("\t starting the workers\n");
+    printf("\t starting the workers; mappers = %lu, threads = %lu\n", num_map_tasks, num_threads);
     start_workers (&map_callback, std::min(num_map_tasks, num_threads), "map"); 
 }
 
