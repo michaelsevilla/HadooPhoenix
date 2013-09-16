@@ -141,7 +141,6 @@ protected:
         
         // Read the next 100 bytes
         read(t->mr->fd, t->mr->fdata + INGEST_THRESHOLD, INGEST_THRESHOLD);
-        printf("start fdata: \n%s\n", t->mr->fdata);
 
         t->mr->run_map((D *) t->mr->fdata, 1);
         pthread_exit(NULL);
@@ -337,7 +336,6 @@ run (char *filename, std::vector<keyval>& result)
     this->fdata = (char *) malloc(2*INGEST_THRESHOLD * sizeof(char));
     memset(fdata, 0, 2*INGEST_THRESHOLD);
     nread = read(fd, this->fdata, INGEST_THRESHOLD);
-    printf("run fdata: \n%s\n", this->fdata);
 
     // Create a thread to start mappers - it must be a thread because we have 
     // to shared the malloc'd data. We must pass the MapReduce instance to the 
@@ -348,7 +346,6 @@ run (char *filename, std::vector<keyval>& result)
     pthread_create(&t1, NULL, &MapReduce::start, (void *) &th_arg);
 
     sleep(4);
-    printf("run fdata2: \n%s\n", this->fdata);
 
     /* TODO:
      *  - re-implement word count and verify it works
@@ -364,17 +361,17 @@ run (char *filename, std::vector<keyval>& result)
     dprintf("In scheduler, all map tasks are done, now scheduling reduce tasks\n");
 
     // Run reduce tasks and get final values
-    get_time (begin);
-    run_reduce();
-    print_time_elapsed("reduce phase", begin);
+    //get_time (begin);
+    //run_reduce();
+    //print_time_elapsed("reduce phase", begin);
 
-    dprintf("In scheduler, all reduce tasks are done, now scheduling merge tasks\n");
+    //dprintf("In scheduler, all reduce tasks are done, now scheduling merge tasks\n");
 
-    get_time (begin);
-    run_merge();
-    print_time_elapsed("merge phase", begin);
-    
-    result.swap(*this->final_vals);
+    //get_time (begin);
+    //run_merge();
+    //print_time_elapsed("merge phase", begin);
+    //
+    //result.swap(*this->final_vals);
     
     // Delete structures
     delete [] this->final_vals;
@@ -452,6 +449,7 @@ map_worker(thread_loc const& loc, double& time, double& user_time, int& tasks)
     	timespec user_begin = get_time();
 	for (data_type* data = (data_type*)task.data; 
             data < (data_type*)task.data + task.len; ++data) {
+            printf("map_worker: \n%s\n", map_worker);
             static_cast<Impl const*>(this)->map(*data, t);
         }
     	user_time += time_elapsed(user_begin);

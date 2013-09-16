@@ -102,6 +102,7 @@ public:
     void map(data_type const& s, map_container& out) const
     {
         printf("Called map\n");
+        printf("%s", s.data); 
     }
 
     int split(wc_string*& in, wc_string& out)
