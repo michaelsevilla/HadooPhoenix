@@ -33,8 +33,8 @@ include $(HOME)/Defines.mk
 
 .PHONY: default all clean
 
-APPS := ingest
-	#\
+APPS := \
+	word_count
         #histogram \
         #linear_regression \
         #kmeans \

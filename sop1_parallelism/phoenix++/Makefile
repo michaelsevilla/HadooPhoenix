@@ -31,7 +31,7 @@ include Defines.mk
 
 .PHONY: default all tests clean
 
-default: all
+default: clean all
 
 all: $(TARGET) tests
 

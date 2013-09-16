@@ -83,6 +83,7 @@ protected:
     // Parameters.
     uint64_t num_threads;               // # of threads to run.
     uint64_t thread_offset;             // cores to skip when assigning threads.
+    bool first;                         // boolean to determine if we have to init the data structures
 
     thread_pool* threadPool;            // Thread pool.
     task_queue* taskQueue;              // Queues of tasks.
@@ -216,6 +217,9 @@ public:
     // This version assumes that the split function is provided.
     int run(char *filename, std::vector<keyval>& result);
 
+    int run_init();
+    int run_reducers(std::vector<keyval>& result);
+
     void emit_intermediate(typename container_type::input_type& i, 
         key_type const& k, value_type const& v) const {
 	i[k].add(v);
@@ -224,27 +228,19 @@ public:
 
 };
 
-//template<typename Impl, typename D, typename K, typename V, class Container>
-//int MapReduce<Impl, D, K, V, Container>::
-//run (char *filename, std::vector<keyval>& result)
-//{
-//    timespec begin;    
-//    std::vector<D> data;
-//    uint64_t count;
-//    D chunk;
-//
-//    // Run splitter to generate chunks
-//    get_time (begin);
-//    while (static_cast<Impl const*>(this)->split(chunk))
-//    {
-//        data.push_back(chunk);
-//    }
-//    count = data.size();
-//    print_time_elapsed("split phase", begin);
-//
-//    return run(filename, count, result);
-//}
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_init ()
+{
+    first = true;
+    return 0;
+}
 
+
+/**
+ * Need to move this up here so that we can split up the map/reduce functions
+ * so that we can run the mappers multiple times
+ */
 template<typename Impl, typename D, typename K, typename V, class Container>
 uint64_t MapReduce<Impl, D, K, V, Container>::
 get_nchunks (data_type *d)
@@ -256,16 +252,35 @@ get_nchunks (data_type *d)
 
     // Run the splitter to chunk the data
     get_time (begin);
-    while (static_cast<Impl const*>(this)->split(d, chunk))
-    {
+    while (static_cast<Impl const*>(this)->split(chunk))
         data.push_back(chunk);
-    }
     count = data.size();
     print_time_elapsed("split phase", begin);
     
     printf("Found nchunks: %lu\n", count);
 
-    return count;
+    if (first) {
+        get_time(begin);
+        // Compute task counts (should make this more adjustable) and then 
+        // allocate storage
+        this->num_map_tasks = std::min(count, this->num_threads) * 16;
+        this->num_reduce_tasks = this->num_threads;
+        printf ("num_map_tasks = %lu\n", num_map_tasks);
+        printf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
+    
+        // Initialize important data structures
+        container.init(this->num_threads, this->num_reduce_tasks);
+        this->final_vals = new std::vector<keyval>[this->num_threads];
+        for(uint64_t i = 0; i < this->num_threads; i++) {
+            // Try to avoid a reallocation. Very costly on Solaris.
+            this->final_vals[i].reserve(100);
+        }
+
+        first = false;
+        print_time_elapsed("library init", begin);
+    }
+
+    return run(&data[0], count, result);
 }
 
 /*
@@ -307,31 +322,6 @@ run (char *filename, std::vector<keyval>& result)
     int nread;
     timespec begin;    
 
-    // Initialize library
-    timespec run_begin = get_time();
-    get_time (begin);
-
-    // One thread opens the file to start reading
-    CHECK_ERROR ((this->fd = open(filename, O_RDONLY)) < 0)
-    printf ("\tfilename: %s; fd: %d\n", filename, this->fd);
-
-    // Compute task counts (should make this more adjustable) and then 
-    // allocate storage
-    // Remove one thread so that we can continue reading data
-    this->num_map_tasks = (std::min(count, this->num_threads) * 16) - 1;
-    this->num_reduce_tasks = this->num_threads;
-    printf("num_map_tasks = %lu\n", this->num_map_tasks);
-    printf("num_threads = %lu\n", this->num_threads);
-
-    container.init(this->num_threads, this->num_reduce_tasks);
-    this->final_vals = new std::vector<keyval>[this->num_threads];
-    for(uint64_t i = 0; i < this->num_threads; i++) 
-    {
-        // Try to avoid a reallocation. Very costly on Solaris.
-        this->final_vals[i].reserve(100);
-    }
-    print_time_elapsed("library init", begin);
-
     // Read the first 100 characters
     this->fdata = (char *) malloc(2*INGEST_THRESHOLD * sizeof(char));
     memset(fdata, 0, 2*INGEST_THRESHOLD);
@@ -355,9 +345,19 @@ run (char *filename, std::vector<keyval>& result)
      *  - work on merge (mr for ingest)
      */
 
-    //run_map((D *) fdata, count);
+   return 0;
+}
 
-    print_time_elapsed("map phase", begin);
+/**
+ * Split this up so that we can call run_mappers multiple times
+ */
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_reducers (std::vector<keyval>& result)
+{
+    timespec begin;    
+    timespec run_begin = get_time();
+
     dprintf("In scheduler, all map tasks are done, now scheduling reduce tasks\n");
 
     // Run reduce tasks and get final values
@@ -379,24 +379,8 @@ run (char *filename, std::vector<keyval>& result)
     CHECK_ERROR (close(fd) < 0);
     
     print_time_elapsed("run time", run_begin);
-
     return 0;
 }
-
-//template<typename Impl, typename D, typename K, typename V, class Container>
-//void * MapReduce<Impl, D, K, V, Container>::
-//start(void *x) 
-//{
-//    printf("Inside the thread\n");
-//    //char *data = (char *) malloc(1000);
-//    //MapReduce mr;
-//    //memset(data, 0, 1000);
-//    //printf("Before calling run_map\n");
-//    //mr.run_map((D *) data, 10);
-//    printf("After calling run_map\n");
-//    pthread_exit(0);
-//}
-
 
 
 /**
