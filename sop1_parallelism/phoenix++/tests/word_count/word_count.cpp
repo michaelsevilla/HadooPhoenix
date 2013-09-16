@@ -41,7 +41,9 @@
 #endif
 
 #include "map_reduce.h"
-#define DEFAULT_DISP_NUM 10
+
+#define INGEST_THRESH       10
+#define DEFAULT_DISP_NUM    10
 
 int count = 0;
 int count_emit = 0;
@@ -95,9 +97,15 @@ class WordsMR : public MapReduceSort<WordsMR, wc_string, wc_word, uint64_t, hash
     uint64_t chunk_size;
     uint64_t splitter_pos;
 public:
-    explicit WordsMR(char* _data, uint64_t length, uint64_t _chunk_size) :
-        data(_data), data_size(length), chunk_size(_chunk_size), 
-            splitter_pos(0) {}
+    explicit WordsMR(uint64_t _chunk_size) :
+        chunk_size(_chunk_size), splitter_pos(0) {}
+
+    void set_data(char* _data, uint64_t length)
+    {
+        data = _data;
+        data_size = length;
+        splitter_pos = 0;
+    }
 
     void* locate(data_type* str, uint64_t len) const
     {
@@ -213,11 +221,14 @@ int main(int argc, char *argv[])
 #else
     uint64_t r = 0;
 
-    fdata = (char *)malloc (finfo.st_size);
+    //fdata = (char *)malloc (finfo.st_size);
+    fdata = (char *)malloc (INGEST_THRESH);
     CHECK_ERROR (fdata == NULL);
-    while(r < (uint64_t)finfo.st_size)
-        r += pread (fd, fdata + r, finfo.st_size, r);
-    CHECK_ERROR (r != (uint64_t)finfo.st_size);
+    while(r < (uint64_t) INGEST_THRESH)
+        r += pread (fd, fdata + r, INGEST_THRESH, r);
+    //while(r < (uint64_t)finfo.st_size)
+    //    r += pread (fd, fdata + r, finfo.st_size, r);
+    //CHECK_ERROR (r != (uint64_t)finfo.st_size);
 #endif    
     
     // Get the number of results to display
@@ -230,11 +241,29 @@ int main(int argc, char *argv[])
     print_time("Wordcount: initialize", begin, end);
 #endif
 
+    // Initialize the library
     printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
     get_time (begin);
     std::vector<WordsMR::keyval> result;    
-    WordsMR mapReduce(fdata, finfo.st_size, 1024*1024);
+    WordsMR mapReduce(1024*1024);
+    mapReduce.run_init();
+
+    // Run the first map iteration
+    mapReduce.set_data(fdata, INGEST_THRESH);
+    printf("fdata2: \n%s\n", fdata);
     CHECK_ERROR( mapReduce.run(result) < 0);
+
+    // Run the second map iteration
+    char *fdata2 = (char *)malloc (INGEST_THRESH);
+    CHECK_ERROR (fdata2 == NULL);
+    r = 0;
+    while(r < (uint64_t) INGEST_THRESH)
+        r += pread (fd, fdata2 + r, INGEST_THRESH, INGEST_THRESH);
+    printf("fdata2: \n%s\n", fdata2);
+    mapReduce.set_data(fdata2, INGEST_THRESH);
+    CHECK_ERROR( mapReduce.run(result) < 0);
+
+    CHECK_ERROR( mapReduce.run_reducers(result) < 0);
     get_time (end);
 
 #ifdef TIMING

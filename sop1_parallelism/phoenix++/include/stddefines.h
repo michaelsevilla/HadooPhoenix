@@ -37,7 +37,7 @@
 // Tunables
 #define L2_CACHE_LINE_SIZE          64
 #define MR_LOCK_PTMUTEX
-#define TIMING
+//#define TIMING
 #define dprintf(...)     //fprintf(stderr, __VA_ARGS__)     // Debug printf
 
 // Thread specific information

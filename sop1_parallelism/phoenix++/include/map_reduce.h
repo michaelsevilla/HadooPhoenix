@@ -185,11 +185,46 @@ public:
     // This version assumes that the split function is provided.
     int run(std::vector<keyval>& result);
 
+    int run_init();
+    int run_reducers(std::vector<keyval>& result);
+
     void emit_intermediate(typename container_type::input_type& i, 
         key_type const& k, value_type const& v) const {
 	i[k].add(v);
     }
 };
+
+/**
+ * Need to move this up here so that we can split up the map/reduce functions
+ * so that we can run the mappers multiple times
+ */
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_init() 
+{
+    timespec begin;    
+    get_time (begin);
+
+    // Compute task counts (should make this more adjustable) and then 
+    // allocate storage
+    uint64_t count = 1;
+    this->num_map_tasks = std::min(count, this->num_threads) * 16;
+    this->num_reduce_tasks = this->num_threads;
+    dprintf ("num_map_tasks = %lu\n", num_map_tasks);
+    dprintf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
+
+    container.init(this->num_threads, this->num_reduce_tasks);
+    this->final_vals = new std::vector<keyval>[this->num_threads];
+    for(uint64_t i = 0; i < this->num_threads; i++) {
+        // Try to avoid a reallocation. Very costly on Solaris.
+        this->final_vals[i].reserve(100);
+    }
+ 
+    print_time_elapsed("library init", begin);
+
+
+   return 0;
+}
 
 template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
@@ -217,30 +252,24 @@ int MapReduce<Impl, D, K, V, Container>::
 run (D *data, uint64_t count, std::vector<keyval>& result)
 {
     timespec begin;    
-    timespec run_begin = get_time();
-    // Initialize library
-    get_time (begin);
-
-    // Compute task counts (should make this more adjustable) and then 
-    // allocate storage
-    this->num_map_tasks = std::min(count, this->num_threads) * 16;
-    this->num_reduce_tasks = this->num_threads;
-    dprintf ("num_map_tasks = %lu\n", num_map_tasks);
-    dprintf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
-
-    container.init(this->num_threads, this->num_reduce_tasks);
-    this->final_vals = new std::vector<keyval>[this->num_threads];
-    for(uint64_t i = 0; i < this->num_threads; i++) {
-        // Try to avoid a reallocation. Very costly on Solaris.
-        this->final_vals[i].reserve(100);
-    }
-    print_time_elapsed("library init", begin);
 
     // Run map tasks and get intermediate values
     get_time (begin);
     run_map(&data[0], count);
     print_time_elapsed("map phase", begin);
 
+    return 0;
+}
+
+/**
+ * Split this up so that we can call run_mappers multiple times
+ */
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_reducers (std::vector<keyval>& result)
+{
+    timespec begin;    
+    timespec run_begin = get_time();
     dprintf("In scheduler, all map tasks are done, now scheduling reduce tasks\n");
 
     // Run reduce tasks and get final values
@@ -260,10 +289,8 @@ run (D *data, uint64_t count, std::vector<keyval>& result)
     delete [] this->final_vals;
     
     print_time_elapsed("run time", run_begin);
-
     return 0;
 }
-
 /**
  * Run map tasks and get intermediate values
  */
