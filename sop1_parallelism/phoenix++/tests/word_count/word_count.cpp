@@ -180,6 +180,11 @@ public:
 
 #define NO_MMAP
 
+/**
+ *
+ * TODO: Words getting split in half... why?
+ * TODO: fork off a pthread to run_mappers in parallel
+ */
 int main(int argc, char *argv[]) 
 {
     int fd;
@@ -234,23 +239,24 @@ int main(int argc, char *argv[])
     mapReduce.set_data(*fdata, INGEST_THRESH);
     CHECK_ERROR( mapReduce.run(result) < 0);
 
-    // Read the second chunk
-    //char *fdata2 = (char *)malloc (INGEST_THRESH + 1);
-    //CHECK_ERROR (fdata2 == NULL);
-    *fdata++;
-    *fdata = (char *) malloc(INGEST_THRESH + 1);
-    CHECK_ERROR(*fdata == NULL);
-    uint64_t r = 0;
-    while(r < (uint64_t) INGEST_THRESH)
-        r += pread (fd, *fdata + r, INGEST_THRESH, INGEST_THRESH);
-    nread += r;
+    int offset = 0;
+    while (nread < (uint64_t) finfo.st_size)
+    {
+        // Read the second chunk
+        *fdata++;
+        *fdata = (char *) malloc(INGEST_THRESH + 1);
+        CHECK_ERROR(*fdata == NULL);
+        uint64_t r = 0;
+        while(r < (uint64_t) INGEST_THRESH)
+            r += pread (fd, *fdata + r, INGEST_THRESH, INGEST_THRESH * offset);
+        nread += r;
 
-    printf("total = %lu\n", nread);
-    printf("remaining = %lu\n", finfo.st_size - nread);
+        // Run the second map iteration
+        mapReduce.set_data(*fdata, INGEST_THRESH);
+        CHECK_ERROR( mapReduce.run(result) < 0);
 
-    // Run the second map iteration
-    mapReduce.set_data(*fdata, INGEST_THRESH);
-    CHECK_ERROR( mapReduce.run(result) < 0);
+        offset++;
+    }
 
     // All mappers are complete; run the reducers
     CHECK_ERROR( mapReduce.run_reducers(result) < 0);
