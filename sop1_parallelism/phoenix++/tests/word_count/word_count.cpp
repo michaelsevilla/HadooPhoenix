@@ -183,7 +183,7 @@ public:
 int main(int argc, char *argv[]) 
 {
     int fd;
-    char * fdata;
+    char **fdata = (char **) malloc(30 * sizeof(char *));
     unsigned int disp_num;
     struct stat finfo;
     char * fname, * disp_num_str;
@@ -199,44 +199,19 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    fname = argv[1];
-    disp_num_str = argv[2];
-
     printf("Wordcount: Running...\n");
 
-    // Read in the file
+    // Get the input file
+    fname = argv[1];
+    disp_num_str = argv[2];
     CHECK_ERROR((fd = open(fname, O_RDONLY)) < 0);
-    // Get the file info (for file length)
     CHECK_ERROR(fstat(fd, &finfo) < 0);
-#ifndef NO_MMAP
-#ifdef MMAP_POPULATE
-    // Memory map the file
-    CHECK_ERROR((fdata = (char*)mmap(0, finfo.st_size + 1, 
-        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0)) == NULL);
-#else
-    // Memory map the file
-    CHECK_ERROR((fdata = (char*)mmap(0, finfo.st_size + 1, 
-        PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)) == NULL);
-#endif
-#else
-    uint64_t r = 0;
 
-    //fdata = (char *)malloc (finfo.st_size);
-    fdata = (char *)malloc (INGEST_THRESH);
-    CHECK_ERROR (fdata == NULL);
-    while(r < (uint64_t) INGEST_THRESH)
-        r += pread (fd, fdata + r, INGEST_THRESH, r);
-    //while(r < (uint64_t)finfo.st_size)
-    //    r += pread (fd, fdata + r, finfo.st_size, r);
-    //CHECK_ERROR (r != (uint64_t)finfo.st_size);
-#endif    
-    
     // Get the number of results to display
     CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
       DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
 
-    get_time (end);
-
+   get_time (end);
 #ifdef TIMING
     print_time("Wordcount: initialize", begin, end);
 #endif
@@ -248,21 +223,36 @@ int main(int argc, char *argv[])
     WordsMR mapReduce(1024*1024);
     mapReduce.run_init();
 
+    // Read the first chunk
+    uint64_t nread = 0;
+    *fdata = (char *)malloc(INGEST_THRESH + 1);
+    CHECK_ERROR (*fdata == NULL);
+    while(nread < (uint64_t) INGEST_THRESH)
+        nread += pread (fd, *fdata + nread, INGEST_THRESH, nread);
+ 
     // Run the first map iteration
-    mapReduce.set_data(fdata, INGEST_THRESH);
-    printf("fdata2: \n%s\n", fdata);
+    mapReduce.set_data(*fdata, INGEST_THRESH);
     CHECK_ERROR( mapReduce.run(result) < 0);
+
+    // Read the second chunk
+    //char *fdata2 = (char *)malloc (INGEST_THRESH + 1);
+    //CHECK_ERROR (fdata2 == NULL);
+    *fdata++;
+    *fdata = (char *) malloc(INGEST_THRESH + 1);
+    CHECK_ERROR(*fdata == NULL);
+    uint64_t r = 0;
+    while(r < (uint64_t) INGEST_THRESH)
+        r += pread (fd, *fdata + r, INGEST_THRESH, INGEST_THRESH);
+    nread += r;
+
+    printf("total = %lu\n", nread);
+    printf("remaining = %lu\n", finfo.st_size - nread);
 
     // Run the second map iteration
-    char *fdata2 = (char *)malloc (INGEST_THRESH);
-    CHECK_ERROR (fdata2 == NULL);
-    r = 0;
-    while(r < (uint64_t) INGEST_THRESH)
-        r += pread (fd, fdata2 + r, INGEST_THRESH, INGEST_THRESH);
-    printf("fdata2: \n%s\n", fdata2);
-    mapReduce.set_data(fdata2, INGEST_THRESH);
+    mapReduce.set_data(*fdata, INGEST_THRESH);
     CHECK_ERROR( mapReduce.run(result) < 0);
 
+    // All mappers are complete; run the reducers
     CHECK_ERROR( mapReduce.run_reducers(result) < 0);
     get_time (end);
 
@@ -291,7 +281,8 @@ int main(int argc, char *argv[])
 #ifndef NO_MMAP
     CHECK_ERROR(munmap(fdata, finfo.st_size + 1) < 0);
 #else
-    free (fdata);
+    //free (fdata);
+    //free (fdata2);
 #endif
     CHECK_ERROR(close(fd) < 0);
 
