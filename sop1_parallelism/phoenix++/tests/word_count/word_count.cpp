@@ -32,6 +32,8 @@
 
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
 #include <ctype.h>
@@ -178,21 +180,45 @@ public:
     }
 };
 
+/**
+ * Helper functions
+ */
+
+// Find word boundary for chunk
+uint64_t find_split(int fd, uint64_t init_split) 
+{
+    char c = '\0';
+    uint64_t split;
+    for (split = init_split; c != ' ' && c != '\n'; split++)
+    {
+        CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
+    }
+
+    return INGEST_THRESH + (split - init_split) - 1;
+}
+
+uint64_t read_chunk(int, char *fdata, uint64_t chunk_size)
+{
+    
+}
+
 #define NO_MMAP
 
 /**
- *
- * TODO: Words getting split in half... why?
  * TODO: fork off a pthread to run_mappers in parallel
  */
 int main(int argc, char *argv[]) 
 {
     int fd;
-    char **fdata = (char **) malloc(30 * sizeof(char *));
+    char **fdata = (char **) malloc(30 * sizeof(char *));       // One chunk for all mappers/reducers to process
+    char **start;
     unsigned int disp_num;
     struct stat finfo;
     char * fname, * disp_num_str;
+    uint64_t chunk_size = 0;                                    // Where the chunks split
+    uint64_t nread = 0;                                         // How much of the file we have read thus far
     struct timespec begin, end, total_begin, total_end;
+    int nchunks = 0;
 
     get_time (total_begin);
     get_time (begin);
@@ -224,38 +250,47 @@ int main(int argc, char *argv[])
     // Initialize the library
     printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
     get_time (begin);
+    start = fdata;
     std::vector<WordsMR::keyval> result;    
     WordsMR mapReduce(1024*1024);
     mapReduce.run_init();
 
     // Read the first chunk
-    uint64_t nread = 0;
-    *fdata = (char *)malloc(INGEST_THRESH + 1);
+    chunk_size = find_split(fd, INGEST_THRESH);
+    *fdata = (char *)malloc(chunk_size + 1);
     CHECK_ERROR (*fdata == NULL);
-    while(nread < (uint64_t) INGEST_THRESH)
-        nread += pread (fd, *fdata + nread, INGEST_THRESH, nread);
+    uint64_t r = 0;
+    while(r < (uint64_t) chunk_size)
+        r += pread (fd, *fdata + r, chunk_size, r);
+    nread += r;
+    nchunks++;
  
     // Run the first map iteration
-    mapReduce.set_data(*fdata, INGEST_THRESH);
+    mapReduce.set_data(*fdata, chunk_size);
     CHECK_ERROR( mapReduce.run(result) < 0);
 
-    int offset = 0;
-    while (nread < (uint64_t) finfo.st_size)
-    {
-        // Read the second chunk
+    while( nread < (uint64_t) finfo.st_size) {
+
+        // Determine if we have reached the end of the file
+        if (nread + INGEST_THRESH >= (uint64_t) finfo.st_size)
+            chunk_size = finfo.st_size - nread;
+        else
+            chunk_size = find_split(fd, nread + INGEST_THRESH);
+
+        // Read the next chunk
         *fdata++;
-        *fdata = (char *) malloc(INGEST_THRESH + 1);
+        *fdata = (char *) malloc(chunk_size + 1);
+        nread =+ read_chunk(fd, *fdata, chunk_size);
         CHECK_ERROR(*fdata == NULL);
-        uint64_t r = 0;
-        while(r < (uint64_t) INGEST_THRESH)
-            r += pread (fd, *fdata + r, INGEST_THRESH, INGEST_THRESH * offset);
+        r = 0;
+        while(r < (uint64_t) chunk_size)
+            r += pread (fd, *fdata + r, chunk_size, nread + r);
         nread += r;
+        nchunks++;
 
         // Run the second map iteration
-        mapReduce.set_data(*fdata, INGEST_THRESH);
+        mapReduce.set_data(*fdata, chunk_size);
         CHECK_ERROR( mapReduce.run(result) < 0);
-
-        offset++;
     }
 
     // All mappers are complete; run the reducers
@@ -287,13 +322,15 @@ int main(int argc, char *argv[])
 #ifndef NO_MMAP
     CHECK_ERROR(munmap(fdata, finfo.st_size + 1) < 0);
 #else
-    //free (fdata);
-    //free (fdata2);
+    fdata = start;
+    for (int i = 0; i < nchunks; i++)
+        free(fdata[i]);
+    free(fdata);
 #endif
     CHECK_ERROR(close(fd) < 0);
 
     get_time(total_end);
-    get_time (end);
+    get_time(end);
 
 #ifdef TIMING
     print_time("Wordcount: finalize", begin, end);
