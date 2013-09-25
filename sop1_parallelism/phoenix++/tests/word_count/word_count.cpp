@@ -37,6 +37,9 @@
 #include <fcntl.h>
 #include <string.h>
 #include <ctype.h>
+#include <pthread.h>
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 
 #ifdef TBB
 #include "tbb/scalable_allocator.h"
@@ -44,8 +47,15 @@
 
 #include "map_reduce.h"
 
-#define INGEST_THRESH       10
+#define INGEST_THRESH       100
+//#define INGEST_THRESH       1073741824
+//#define INGEST_THRESH       4294967296
+//#define INGEST_THRESH       2147483648
+//#define INGEST_THRESH       5368709120
+//#define NCHUNKS_MAX         100000
+#define NCHUNKS_MAX         100
 #define DEFAULT_DISP_NUM    10
+//#define DEBUG
 
 int count = 0;
 int count_emit = 0;
@@ -54,6 +64,13 @@ int count_emit = 0;
 struct wc_string {
     char* data;
     uint64_t len;
+};
+
+struct chunk_t {
+    int fd;
+    uint64_t chunk_size;
+    uint64_t nread;
+    char **fdata;
 };
 
 // a single null-terminated word
@@ -190,16 +207,58 @@ uint64_t find_split(int fd, uint64_t init_split)
     char c = '\0';
     uint64_t split;
     for (split = init_split; c != ' ' && c != '\n'; split++)
-    {
         CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
-    }
 
     return INGEST_THRESH + (split - init_split) - 1;
 }
 
-uint64_t read_chunk(int, char *fdata, uint64_t chunk_size)
+/**
+ * \fn          read_chunk
+ * \brief       Reads a chunk of data into memory.
+ *
+ * param[in]    fd      The file descriptor to read from.
+ * param[in]    fdata   The pointer to malloc data to.
+ * param[in]    nread   The amount of data that we have already read.
+ *
+ * \return      nread   The amount of data that we have read after the function exits.
+ */
+uint64_t read_chunk(int fd, char *fdata, uint64_t chunk_size, uint64_t nread)
 {
-    
+    uint64_t r = 0;
+
+    CHECK_ERROR (fdata == NULL);
+#ifdef DEBUG
+    printf("\t\tstarting to read chunk\n");
+#endif 
+    while(r < (uint64_t) chunk_size) {
+        r += pread (fd, fdata + r, chunk_size - r, nread + r);
+#ifdef DEBUG
+        printf("\t\tread %lu of %lu bytes\n", r, chunk_size);
+#endif
+    }
+
+#ifdef DEBUG
+    printf("fdata: \n###\n%s\n###\n\n", fdata);
+#endif
+
+    return nread + r;
+}
+
+void *read_data( void *args)
+{
+    chunk_t *chunk_args = (chunk_t *) args;
+    int fd =                chunk_args->fd;
+    uint64_t nread =        chunk_args->nread;
+    uint64_t chunk_size =   chunk_args->chunk_size;
+    char **fdata =          chunk_args->fdata;
+#ifdef DEBUG
+    printf("\tthread instructed to read %lu bytes\n", chunk_size);
+#endif
+
+    nread = read_chunk(fd, *fdata, chunk_size, nread);
+
+
+    return (void *) nread;
 }
 
 #define NO_MMAP
@@ -210,7 +269,7 @@ uint64_t read_chunk(int, char *fdata, uint64_t chunk_size)
 int main(int argc, char *argv[]) 
 {
     int fd;
-    char **fdata = (char **) malloc(30 * sizeof(char *));       // One chunk for all mappers/reducers to process
+    char **fdata = (char **) malloc(NCHUNKS_MAX * sizeof(char *));       // One chunk for all mappers/reducers to process
     char **start;
     unsigned int disp_num;
     struct stat finfo;
@@ -258,40 +317,66 @@ int main(int argc, char *argv[])
     // Read the first chunk
     chunk_size = find_split(fd, INGEST_THRESH);
     *fdata = (char *)malloc(chunk_size + 1);
-    CHECK_ERROR (*fdata == NULL);
-    uint64_t r = 0;
-    while(r < (uint64_t) chunk_size)
-        r += pread (fd, *fdata + r, chunk_size, r);
-    nread += r;
+    nread = read_chunk (fd, *fdata, chunk_size, nread);
+    printf("nread = %lu bytes\n", (uint64_t) nread);
     nchunks++;
  
-    // Run the first map iteration
-    mapReduce.set_data(*fdata, chunk_size);
-    CHECK_ERROR( mapReduce.run(result) < 0);
-
+    char *prev_fdata;
     while( nread < (uint64_t) finfo.st_size) {
+        pthread_t thread1;
+        chunk_t chunk_args = {fd, 0, nread, NULL};
+        uint64_t prev_chunk_size = chunk_size;
+        void *ret;
 
         // Determine if we have reached the end of the file
         if (nread + INGEST_THRESH >= (uint64_t) finfo.st_size)
-            chunk_size = finfo.st_size - nread;
+            chunk_size = (uint64_t) finfo.st_size - nread;
         else
             chunk_size = find_split(fd, nread + INGEST_THRESH);
+        
+        // Create a thread to read data into memory
+#ifdef DEBUG
+        printf("\tcreating read thread to read %lu bytes\n", chunk_size);
+#endif
 
         // Read the next chunk
+        prev_fdata = *fdata;
         *fdata++;
         *fdata = (char *) malloc(chunk_size + 1);
-        nread =+ read_chunk(fd, *fdata, chunk_size);
-        CHECK_ERROR(*fdata == NULL);
-        r = 0;
-        while(r < (uint64_t) chunk_size)
-            r += pread (fd, *fdata + r, chunk_size, nread + r);
-        nread += r;
-        nchunks++;
 
-        // Run the second map iteration
-        mapReduce.set_data(*fdata, chunk_size);
+#ifdef DEBUG
+        printf("\tthread mallocd chunk: %lu bytes\n", chunk_size);
+#endif
+
+        chunk_args.chunk_size = chunk_size;
+        chunk_args.fdata = fdata;
+        CHECK_ERROR (pthread_create (&thread1, NULL, read_data, (void *) &chunk_args) < 0);
+
+        // Run the next map iteration, in parallel with the read
+#ifdef DEBUG
+        printf("\tmaster thread runs mappers\n");
+#endif
+        mapReduce.set_data(prev_fdata, prev_chunk_size);
         CHECK_ERROR( mapReduce.run(result) < 0);
+
+#ifdef DEBUG
+        printf("\twaiting for other thread to join\n");
+#endif
+        pthread_join (thread1, &ret);
+        nread = (uint64_t ) ret;
+        nchunks++;
+#ifdef DEBUG
+        printf("\tread thread returned\n");
+#endif
+        printf("nread = %lu bytes\n", nread);
     }
+
+    // Compute on the last chunk
+#ifdef DEBBUG
+    printf("fdata: \n---\n%s\n---\n\n", *fdata);
+#endif
+    mapReduce.set_data(*fdata, chunk_size);
+    CHECK_ERROR( mapReduce.run(result) < 0);
 
     // All mappers are complete; run the reducers
     CHECK_ERROR( mapReduce.run_reducers(result) < 0);
@@ -339,5 +424,6 @@ int main(int argc, char *argv[])
 
     return 0;
 }
+
 
 // vim: ts=8 sw=4 sts=4 smarttab smartindent
