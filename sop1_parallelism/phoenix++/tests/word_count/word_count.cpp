@@ -48,9 +48,9 @@
 
 #include "map_reduce.h"
 
-#define INGEST_THRESH       100
+//#define INGEST_THRESH       100
 //#define INGEST_THRESH       1073741824
-//#define INGEST_THRESH       2147483648
+#define INGEST_THRESH       2147483648
 //#define INGEST_THRESH       3221225472
 //#define INGEST_THRESH       4294967296
 //#define INGEST_THRESH       5368709120
@@ -58,8 +58,8 @@
 //#define INGEST_THRESH       21474836480
 #define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
-#define DEBUG
-//#define NO_MMAP
+//#define DEBUG
+#define NO_MMAP
 
 int count = 0;
 int count_emit = 0;
@@ -265,7 +265,14 @@ void *read_data( void *args)
 }
 
 /**
- * TODO: fork off a pthread to run_mappers in parallel
+ * Sample application that requires explicit calling of MapReduce phases
+ *      init()
+ *      map()
+ *      reduce()
+ *  ... which allows multiple map rounds
+ *
+ *  Notes
+ *      - removed mmap because we can't mmap part of a file
  */
 int main(int argc, char *argv[]) 
 {
@@ -277,11 +284,11 @@ int main(int argc, char *argv[])
     char * fname, * disp_num_str;
     uint64_t chunk_size = 0;                                    // Where the chunks split
     uint64_t nread = 0;                                         // How much of the file we have read thus far
+    char *prev_fdata;                                           // Chunk of last round
     struct timespec begin, end, total_begin, total_end;
     int nchunks = 0;
 
     get_time (total_begin);
-    get_time (begin);
 
     // Make sure a filename is specified
     if (argv[1] == NULL)
@@ -302,11 +309,6 @@ int main(int argc, char *argv[])
     CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
       DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
 
-   get_time (end);
-#ifdef TIMING
-    print_time("Wordcount: initialize", begin, end);
-#endif
-
     // Initialize the library
     printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
     get_time (begin);
@@ -314,30 +316,19 @@ int main(int argc, char *argv[])
     std::vector<WordsMR::keyval> result;    
     WordsMR mapReduce(1024*1024);
     mapReduce.run_init();
-
     get_time (end);
-#ifdef TIMING
     print_time("Wordcount: initialize libraries", begin, end);
-#endif
 
     // Read the first chunk
     get_time (begin);
     chunk_size = find_split(fd, INGEST_THRESH, nread, finfo.st_size);
-#ifndef NO_MMAP
-    printf("Memory Mapping the data\n");
-    *fdata = (char *)mmap(0, (size_t) chunk_size + 1, 
-        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
-    nread = strlen(*fdata);
-    debug_printf("fdata (%lu bytes): \n##########\n%s\n##########\n\n", nread, *fdata);
-#else
     printf("Mallocing the data\n");
     *fdata = (char *)malloc(chunk_size + 1);
     nread = read_chunk (fd, *fdata, chunk_size, nread);
-#endif
     printf("nread = %lu bytes\n", (uint64_t) nread);
     nchunks++;
- 
-    char *prev_fdata;
+
+    // We to process one chunk behind the current read 
     while( nread < (uint64_t) finfo.st_size) {
         pthread_t thread1;
         chunk_t chunk_args = {fd, 0, nread, NULL};
@@ -351,26 +342,21 @@ int main(int argc, char *argv[])
         // Read the next chunk
         prev_fdata = *fdata;
         *fdata++;
-#ifndef NO_MMAP
-        *fdata = (char *)mmap(0, chunk_size + 1, 
-            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
-#else
         *fdata = (char *) malloc(chunk_size + 1);
-#endif
-
         debug_printf("\tthread mallocd chunk: %lu bytes\n", chunk_size);
 
+        // Spawn a thread to read the data in parallel
         chunk_args.chunk_size = chunk_size;
         chunk_args.fdata = fdata;
         CHECK_ERROR (pthread_create (&thread1, NULL, read_data, (void *) &chunk_args) < 0);
 
-        // Run the next map iteration, in parallel with the read
+        // Execution of the mappers continues in parallel with the read
         debug_printf("\tmaster thread runs mappers\n");
         mapReduce.set_data(prev_fdata, prev_chunk_size);
         CHECK_ERROR( mapReduce.run(result) < 0);
 
+        // Cleanup
         debug_printf("\twaiting for other thread to join\n");
-
         pthread_join (thread1, &ret);
         nread = (uint64_t ) ret;
         nchunks++;
@@ -383,22 +369,17 @@ int main(int argc, char *argv[])
     mapReduce.set_data(*fdata, chunk_size);
     CHECK_ERROR( mapReduce.run(result) < 0);
     get_time (end);
-#ifdef TIMING
     print_time("Wordcount: all mappers", begin, end);
-#endif
 
     // All mappers are complete; run the reducers
     get_time (begin);
     CHECK_ERROR( mapReduce.run_reducers(result) < 0);
     get_time (end);
-
-#ifdef TIMING
     print_time("Wordcount: reducers", begin, end);
-#endif
     printf("Wordcount: MapReduce Completed\n");
 
+    // Print out the results
     get_time (begin);
-
     unsigned int dn = std::min(disp_num, (unsigned int)result.size());
     printf("\nWordcount: Results (TOP %d of %lu):\n", dn, result.size());
     uint64_t total = 0;
@@ -414,24 +395,16 @@ int main(int argc, char *argv[])
 
     printf("Total: %lu\n", total);
 
+    // Clealnup
     fdata = start;
-    for (int i = 0; i < nchunks; i++) {
-#ifndef NO_MMAP
-        CHECK_ERROR(munmap(fdata[i], strlen(fdata[i])) < 0);
-#else
+    for (int i = 0; i < nchunks; i++) 
         free(fdata[i]);
-#endif
-    }
     free(fdata);
     CHECK_ERROR(close(fd) < 0);
-
     get_time(total_end);
     get_time(end);
-
-#ifdef TIMING
     print_time("Wordcount: finalize", begin, end);
     print_time("Wordcount: total", total_begin, total_end);
-#endif
 
     return 0;
 }
