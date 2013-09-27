@@ -202,6 +202,8 @@ run_init ()
     first = true;
     return 0;
 }
+
+
 /**
  * Need to move this up here so that we can split up the map/reduce functions
  * so that we can run the mappers multiple times
