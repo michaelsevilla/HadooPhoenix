@@ -72,6 +72,7 @@ protected:
     // Parameters.
     uint64_t num_threads;               // # of threads to run.
     uint64_t thread_offset;             // cores to skip when assigning threads.
+    bool first;                         // boolean to determine if we have to init the data structures
 
     thread_pool* threadPool;            // Thread pool.
     task_queue* taskQueue;              // Queues of tasks.
@@ -194,38 +195,17 @@ public:
     }
 };
 
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_init ()
+{
+    first = true;
+    return 0;
+}
 /**
  * Need to move this up here so that we can split up the map/reduce functions
  * so that we can run the mappers multiple times
  */
-template<typename Impl, typename D, typename K, typename V, class Container>
-int MapReduce<Impl, D, K, V, Container>::
-run_init() 
-{
-    timespec begin;    
-    get_time (begin);
-
-    // Compute task counts (should make this more adjustable) and then 
-    // allocate storage
-    uint64_t count = 1;
-    this->num_map_tasks = std::min(count, this->num_threads) * 16;
-    this->num_reduce_tasks = this->num_threads;
-    dprintf ("num_map_tasks = %lu\n", num_map_tasks);
-    dprintf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
-
-    container.init(this->num_threads, this->num_reduce_tasks);
-    this->final_vals = new std::vector<keyval>[this->num_threads];
-    for(uint64_t i = 0; i < this->num_threads; i++) {
-        // Try to avoid a reallocation. Very costly on Solaris.
-        this->final_vals[i].reserve(100);
-    }
- 
-    print_time_elapsed("library init", begin);
-
-
-   return 0;
-}
-
 template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
 run (std::vector<keyval>& result)
@@ -238,11 +218,30 @@ run (std::vector<keyval>& result)
     // Run splitter to generate chunks
     get_time (begin);
     while (static_cast<Impl const*>(this)->split(chunk))
-    {
         data.push_back(chunk);
-    }
     count = data.size();
     print_time_elapsed("split phase", begin);
+
+    if (first) {
+        get_time(begin);
+        // Compute task counts (should make this more adjustable) and then 
+        // allocate storage
+        this->num_map_tasks = std::min(count, this->num_threads) * 16;
+        this->num_reduce_tasks = this->num_threads;
+        printf ("num_map_tasks = %lu\n", num_map_tasks);
+        printf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
+    
+        // Initialize important data structures
+        container.init(this->num_threads, this->num_reduce_tasks);
+        this->final_vals = new std::vector<keyval>[this->num_threads];
+        for(uint64_t i = 0; i < this->num_threads; i++) {
+            // Try to avoid a reallocation. Very costly on Solaris.
+            this->final_vals[i].reserve(100);
+        }
+
+        first = false;
+        print_time_elapsed("library init", begin);
+    }
 
     return run(&data[0], count, result);
 }

@@ -40,6 +40,7 @@
 #include <pthread.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
+#include <stdarg.h>
 
 #ifdef TBB
 #include "tbb/scalable_allocator.h"
@@ -49,16 +50,28 @@
 
 #define INGEST_THRESH       100
 //#define INGEST_THRESH       1073741824
-//#define INGEST_THRESH       4294967296
 //#define INGEST_THRESH       2147483648
+//#define INGEST_THRESH       3221225472
+//#define INGEST_THRESH       4294967296
 //#define INGEST_THRESH       5368709120
-//#define NCHUNKS_MAX         100000
-#define NCHUNKS_MAX         100
+//#define INGEST_THRESH       10737418240
+//#define INGEST_THRESH       21474836480
+#define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
-//#define DEBUG
+#define DEBUG
+//#define NO_MMAP
 
 int count = 0;
 int count_emit = 0;
+
+int debug_printf(const char *fmt, ...) {
+#ifdef DEBUG
+    va_list args;
+    va_start(args, fmt);
+    return vprintf(fmt, args);
+#endif
+    return 0;
+}
 
 // a passage from the text. The input data to the Map-Reduce
 struct wc_string {
@@ -150,9 +163,6 @@ public:
             {
                 s.data[i] = 0;
                 wc_word word = { s.data+start };
-		//if ((count_emit % 1000000) == 0)
-		//    printf("... emitted %d\n", count_emit);
-		//count_emit++;
                 emit_intermediate(out, word, 1);
             }
         }
@@ -184,10 +194,6 @@ public:
         
         splitter_pos = end;
 
-        /* Return true since the out data is valid. */
-	//if ((count % 100) == 0) 
-	//    printf("... finished split %d\n", count);
-	//count++;
         return 1;
     }
 
@@ -202,13 +208,20 @@ public:
  */
 
 // Find word boundary for chunk
-uint64_t find_split(int fd, uint64_t init_split) 
+uint64_t find_split(int fd, uint64_t init_split, uint64_t nread, off_t fsize)
 {
-    char c = '\0';
     uint64_t split;
-    for (split = init_split; c != ' ' && c != '\n'; split++)
+    char c = '\0';
+
+    // Determine if we have reached the end of the file
+    if (nread + INGEST_THRESH >= (uint64_t) fsize)
+        return (uint64_t) fsize - nread;
+
+    // Otherwise return the next chunk size
+    for (split = init_split; c != ' ' && c != '\n'; split++) 
         CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
 
+    debug_printf("\t\tchunk size = %lu\n", INGEST_THRESH + (split - init_split) - 1);
     return INGEST_THRESH + (split - init_split) - 1;
 }
 
@@ -227,19 +240,12 @@ uint64_t read_chunk(int fd, char *fdata, uint64_t chunk_size, uint64_t nread)
     uint64_t r = 0;
 
     CHECK_ERROR (fdata == NULL);
-#ifdef DEBUG
-    printf("\t\tstarting to read chunk\n");
-#endif 
+    debug_printf("\t\tstarting to read chunk\n");
     while(r < (uint64_t) chunk_size) {
         r += pread (fd, fdata + r, chunk_size - r, nread + r);
-#ifdef DEBUG
-        printf("\t\tread %lu of %lu bytes\n", r, chunk_size);
-#endif
+        debug_printf("\t\tread %lu of %lu bytes\n", r, chunk_size);
     }
-
-#ifdef DEBUG
-    printf("fdata: \n###\n%s\n###\n\n", fdata);
-#endif
+    debug_printf("fdata (%lu bytes): \n##########\n%s\n##########\n\n", (uint64_t) strlen(fdata), fdata);
 
     return nread + r;
 }
@@ -251,17 +257,12 @@ void *read_data( void *args)
     uint64_t nread =        chunk_args->nread;
     uint64_t chunk_size =   chunk_args->chunk_size;
     char **fdata =          chunk_args->fdata;
-#ifdef DEBUG
-    printf("\tthread instructed to read %lu bytes\n", chunk_size);
-#endif
 
+    debug_printf("\tthread instructed to read %lu bytes\n", chunk_size);
     nread = read_chunk(fd, *fdata, chunk_size, nread);
-
 
     return (void *) nread;
 }
-
-#define NO_MMAP
 
 /**
  * TODO: fork off a pthread to run_mappers in parallel
@@ -314,10 +315,25 @@ int main(int argc, char *argv[])
     WordsMR mapReduce(1024*1024);
     mapReduce.run_init();
 
+    get_time (end);
+#ifdef TIMING
+    print_time("Wordcount: initialize libraries", begin, end);
+#endif
+
     // Read the first chunk
-    chunk_size = find_split(fd, INGEST_THRESH);
+    get_time (begin);
+    chunk_size = find_split(fd, INGEST_THRESH, nread, finfo.st_size);
+#ifndef NO_MMAP
+    printf("Memory Mapping the data\n");
+    *fdata = (char *)mmap(0, (size_t) chunk_size + 1, 
+        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+    nread = strlen(*fdata);
+    debug_printf("fdata (%lu bytes): \n##########\n%s\n##########\n\n", nread, *fdata);
+#else
+    printf("Mallocing the data\n");
     *fdata = (char *)malloc(chunk_size + 1);
     nread = read_chunk (fd, *fdata, chunk_size, nread);
+#endif
     printf("nread = %lu bytes\n", (uint64_t) nread);
     nchunks++;
  
@@ -327,63 +343,57 @@ int main(int argc, char *argv[])
         chunk_t chunk_args = {fd, 0, nread, NULL};
         uint64_t prev_chunk_size = chunk_size;
         void *ret;
-
-        // Determine if we have reached the end of the file
-        if (nread + INGEST_THRESH >= (uint64_t) finfo.st_size)
-            chunk_size = (uint64_t) finfo.st_size - nread;
-        else
-            chunk_size = find_split(fd, nread + INGEST_THRESH);
-        
+       
         // Create a thread to read data into memory
-#ifdef DEBUG
-        printf("\tcreating read thread to read %lu bytes\n", chunk_size);
-#endif
+        chunk_size = find_split(fd, nread + INGEST_THRESH, nread, finfo.st_size);
+        debug_printf("\tcreating read thread to read %lu bytes\n", chunk_size);
 
         // Read the next chunk
         prev_fdata = *fdata;
         *fdata++;
+#ifndef NO_MMAP
+        *fdata = (char *)mmap(0, chunk_size + 1, 
+            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+#else
         *fdata = (char *) malloc(chunk_size + 1);
-
-#ifdef DEBUG
-        printf("\tthread mallocd chunk: %lu bytes\n", chunk_size);
 #endif
+
+        debug_printf("\tthread mallocd chunk: %lu bytes\n", chunk_size);
 
         chunk_args.chunk_size = chunk_size;
         chunk_args.fdata = fdata;
         CHECK_ERROR (pthread_create (&thread1, NULL, read_data, (void *) &chunk_args) < 0);
 
         // Run the next map iteration, in parallel with the read
-#ifdef DEBUG
-        printf("\tmaster thread runs mappers\n");
-#endif
+        debug_printf("\tmaster thread runs mappers\n");
         mapReduce.set_data(prev_fdata, prev_chunk_size);
         CHECK_ERROR( mapReduce.run(result) < 0);
 
-#ifdef DEBUG
-        printf("\twaiting for other thread to join\n");
-#endif
+        debug_printf("\twaiting for other thread to join\n");
+
         pthread_join (thread1, &ret);
         nread = (uint64_t ) ret;
         nchunks++;
-#ifdef DEBUG
-        printf("\tread thread returned\n");
-#endif
+        debug_printf("\tread thread returned\n");
+
         printf("nread = %lu bytes\n", nread);
     }
 
     // Compute on the last chunk
-#ifdef DEBBUG
-    printf("fdata: \n---\n%s\n---\n\n", *fdata);
-#endif
     mapReduce.set_data(*fdata, chunk_size);
     CHECK_ERROR( mapReduce.run(result) < 0);
+    get_time (end);
+#ifdef TIMING
+    print_time("Wordcount: all mappers", begin, end);
+#endif
 
     // All mappers are complete; run the reducers
+    get_time (begin);
     CHECK_ERROR( mapReduce.run_reducers(result) < 0);
     get_time (end);
 
 #ifdef TIMING
-    print_time("Wordcount: library", begin, end);
+    print_time("Wordcount: reducers", begin, end);
 #endif
     printf("Wordcount: MapReduce Completed\n");
 
@@ -404,14 +414,15 @@ int main(int argc, char *argv[])
 
     printf("Total: %lu\n", total);
 
-#ifndef NO_MMAP
-    CHECK_ERROR(munmap(fdata, finfo.st_size + 1) < 0);
-#else
     fdata = start;
-    for (int i = 0; i < nchunks; i++)
+    for (int i = 0; i < nchunks; i++) {
+#ifndef NO_MMAP
+        CHECK_ERROR(munmap(fdata[i], strlen(fdata[i])) < 0);
+#else
         free(fdata[i]);
-    free(fdata);
 #endif
+    }
+    free(fdata);
     CHECK_ERROR(close(fd) < 0);
 
     get_time(total_end);
