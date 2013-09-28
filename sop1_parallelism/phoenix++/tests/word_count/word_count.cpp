@@ -49,7 +49,7 @@
 
 #include "map_reduce.h"
 
-#define INGEST_THRESH       2147483648
+#define INGEST_THRESH       10
 #define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
 
@@ -57,6 +57,8 @@
 
 int count = 0;
 int count_emit = 0;
+bool input_dir = false;
+uint64_t total_nchunks = 0;
 
 int debug_printf(const char *fmt, ...) {
 #ifdef DEBUG
@@ -203,27 +205,42 @@ public:
  * Helper functions
  */
 
-void get_chunk(chunk_t *chunk, char* path, bool input_dir) {
+void get_chunk(chunk_t *chunk, char* path) {
     int fd = -1;
+    bool first = false;
 
     if (input_dir) {
         char fname[LINE_MAX] = "";
         struct stat finfo;
 
+        debug_printf("Parsing a directory\n");
+
+        if (chunk->fd >= 0) {
+            // We still have the last file open
+            CHECK_ERROR( close(chunk->fd) < 0);
+        }
+        else 
+            first = true;
+
         // Go through the directory until and pull the correct file
         strcpy(fname, path);
-        //strcat(fname, "/part-00000");
         strcat(fname, "/test.txt");
-        printf("fname: %s\n", fname);
+        debug_printf("fname: %s\n", fname);
         CHECK_ERROR((fd = open(fname, O_RDONLY)) < 0);
         CHECK_ERROR(fstat(fd, &finfo) < 0);
 
         chunk->fd = fd;
         chunk->size = (uint64_t) finfo.st_size;
+
+        // Set this for the loop 
+        if (first)
+            chunk->fsize = (uint64_t) (finfo.st_size * total_nchunks);
     }
     else {
         uint64_t split, init_split;
         char c = '\0';
+
+        debug_printf("Parsing a file\n");
 
         if (chunk->fd < 0) {
             // The file has not been opened yet
@@ -239,12 +256,13 @@ void get_chunk(chunk_t *chunk, char* path, bool input_dir) {
         init_split = chunk->nread + INGEST_THRESH;
 
         // Determine if we have reached the end of the file
-        if (init_split >= chunk->size)
+        debug_printf("\t\tinit_split = %lu, chunk->size = %lu\n", init_split, chunk->fsize);
+        if (init_split >= chunk->fsize)
             chunk->size = (uint64_t) (chunk->fsize - chunk->nread);
         else {
             // Otherwise return the next chunk size
             for (split = init_split; c != ' ' && c != '\n'; split++) 
-                CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
+                CHECK_ERROR(pread(chunk->fd, &c, 1, split - 1) < 0);
     
             debug_printf("\t\tchunk size = %lu\n", INGEST_THRESH + (split - init_split) - 1);
             chunk->size = (uint64_t) (INGEST_THRESH + (split - init_split) - 1);
@@ -252,47 +270,6 @@ void get_chunk(chunk_t *chunk, char* path, bool input_dir) {
     }
 }
 
-// Find the file boundary
-void get_file_info(chunk_t *chunk, char *path, uint64_t nchunks) {
-    int fd;
-    struct stat finfo;
-    char fname[LINE_MAX] = "";
-
-    strcpy(fname, path);
-    //strcat(fname, "/part-00000");
-    strcat(fname, "/test.txt");
-    CHECK_ERROR((fd = open(fname, O_RDONLY)) < 0);
-    CHECK_ERROR(fstat(fd, &finfo) < 0);
-
-    chunk->fd = fd;
-    chunk->size = finfo.st_size;
-}
-
-// Find word boundary for chunk
-//uint64_t get_split(int fd, uint64_t init_split, uint64_t nread, off_t fsize)
-void get_split(chunk_t *chunk, int fd, uint64_t init_split, uint64_t nread)
-{
-    uint64_t split;
-    char c = '\0';
-    struct stat finfo;
-    uint64_t size;
-
-    CHECK_ERROR(fstat(fd, &finfo) < 0);
-
-    // Determine if we have reached the end of the file
-    if (nread + INGEST_THRESH >= (uint64_t) finfo.st_size)
-        size = (uint64_t) finfo.st_size - nread;
-    else {
-        // Otherwise return the next chunk size
-        for (split = init_split; c != ' ' && c != '\n'; split++) 
-            CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
-
-        debug_printf("\t\tchunk size = %lu\n", INGEST_THRESH + (split - init_split) - 1);
-        size = INGEST_THRESH + (split - init_split) - 1;
-    }
-
-    chunk->size = size;
-}
 
 /**
  * \fn          read_chunk
@@ -354,7 +331,7 @@ void *read_data( void *args)
 int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     char **fdata = (char **) malloc(NCHUNKS_MAX * sizeof(char *)); // One chunk for all mappers/reducers to process
     char **start;                                               // Pointer to start of the array of pointers; used for cleanup
-    //char *prev_fdata;                                           // Chunk of last round (so we can stagger reads/map tasks)
+    char *prev_fdata;                                           // Chunk of last round (so we can stagger reads/map tasks)
     char *fname;                                                
     struct timespec begin, end, total_begin, total_end;
     int nchunks = 0;
@@ -376,7 +353,11 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     get_time (begin);
 
     // Read the first chunk
-    get_chunk(&curr_chunk, path, input_dir);
+    debug_printf("before get_chunk: fd = %d, id = %d, size = %lu, fsize = %lu, nread = %lu\n", 
+        curr_chunk.fd, curr_chunk.id, curr_chunk.size, curr_chunk.fsize, curr_chunk.nread);
+    get_chunk(&curr_chunk, path);
+    debug_printf("after get_chunk: fd = %d, id = %d, size = %lu, fsize = %lu, nread = %lu\n", 
+        curr_chunk.fd, curr_chunk.id, curr_chunk.size, curr_chunk.fsize, curr_chunk.nread);
     *fdata = (char *)malloc(curr_chunk.size + 1);
     curr_chunk.id = nchunks;
     curr_chunk.fdata = *fdata;
@@ -384,45 +365,43 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     nchunks++;
 
     // We process one chunk behind the current read 
-//    while( nread < (uint64_t) finfo.st_size) {
-//        pthread_t thread1;
-//        chunk_t chunk_args = {fd, 0, nread, NULL};
-//        uint64_t prev_chunk_size = chunk_size;
-//        void *ret;
-//       
-//        // Create a thread to read data into memory
-//        chunk_size = find_split(fd, nread + INGEST_THRESH, nread, finfo.st_size);
-//        debug_printf("\tcreating read thread to read %lu bytes\n", chunk_size);
-//
-//        // Read the next chunk
-//        prev_fdata = *fdata;
-//        *fdata++;
-//        *fdata = (char *) malloc(chunk_size + 1);
-//        debug_printf("\tthread mallocd chunk: %lu bytes\n", chunk_size);
-//
-//        // Spawn a thread to read the data in parallel
-//        chunk_args.chunk_size = chunk_size;
-//        chunk_args.fdata = fdata;
-//        CHECK_ERROR (pthread_create (&thread1, NULL, read_data, (void *) &chunk_args) < 0);
-//
-//        // Execution of the mappers continues in parallel with the read
-//        debug_printf("\tmaster thread runs mappers\n");
-//        mapReduce.set_data(prev_fdata, prev_chunk_size);
-//        CHECK_ERROR( mapReduce.run(result) < 0);
-//
-//        // Cleanup
-//        debug_printf("\twaiting for other thread to join\n");
-//        pthread_join (thread1, &ret);
-//        nread = (uint64_t ) ret;
-//        nchunks++;
-//        debug_printf("\tread thread returned\n");
-//
-//        printf("nread = %lu bytes\n", nread);
-//    }
+    while( curr_chunk.nread < curr_chunk.fsize) {
+        pthread_t thread1;
+        uint64_t prev_chunk_size = curr_chunk.size;
+        void *ret; 
+       
+        // Create a thread to read data into memory
+        //chunk_size = find_split(fd, nread + INGEST_THRESH, nread, finfo.st_size);
+        get_chunk(&curr_chunk, path);
+        debug_printf("\tcreating read thread to read %lu bytes\n", curr_chunk.size);
+
+        // Read the next chunk
+        prev_fdata = curr_chunk.fdata;
+        *fdata++;
+        *fdata = (char *) malloc(curr_chunk.size + 1);
+        debug_printf("\tthread mallocd chunk: %lu bytes\n", curr_chunk.size);
+
+        // Spawn a thread to read the data in parallel
+        curr_chunk.fdata = *fdata;
+        CHECK_ERROR (pthread_create (&thread1, NULL, read_data, (void *) &curr_chunk) < 0);
+
+        // Execution of the mappers continues in parallel with the read
+        debug_printf("\tmaster thread runs mappers\n");
+        mapReduce.set_data(prev_fdata, prev_chunk_size);
+        CHECK_ERROR( mapReduce.run(result) < 0);
+
+        // Cleanup
+        debug_printf("\twaiting for other thread to join\n");
+        pthread_join (thread1, &ret);
+        curr_chunk.nread = (uint64_t ) ret;
+        nchunks++;
+        debug_printf("\tread thread returned\n");
+    }
 
     // Compute on the last chunk
     mapReduce.set_data(*fdata, curr_chunk.size);
     CHECK_ERROR( mapReduce.run(result) < 0);
+    CHECK_ERROR( close(curr_chunk.fd) < 0);
     get_time (end);
     print_time("Wordcount: all mappers", begin, end);
 
@@ -456,7 +435,6 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
         free(fdata[i]);
 
     free(fdata);
-    CHECK_ERROR(close(curr_chunk.fd) < 0);
 
     // Get final timings
     get_time(total_end);
@@ -473,16 +451,16 @@ int main(int argc, char *argv[])
     char *disp_num_str = NULL;
     char *path = NULL;
     int c;
-    bool input_dir = false;
 
     // Parse command line options
-    while ((c = getopt(argc, argv, "n:d")) != -1) {
+    while ((c = getopt(argc, argv, "n:d:")) != -1) {
         switch(c) {
         case 'n':
             disp_num_str = optarg;
             break;
         case 'd':
             input_dir = true;
+            total_nchunks = atoi(optarg);
             break;
         default: 
             fprintf(stderr, "Wordcount USAGE: %s [options] path\n", argv[0]); 
