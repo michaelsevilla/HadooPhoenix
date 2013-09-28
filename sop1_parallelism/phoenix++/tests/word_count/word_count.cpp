@@ -48,18 +48,11 @@
 
 #include "map_reduce.h"
 
-//#define INGEST_THRESH       100
-//#define INGEST_THRESH       1073741824
 #define INGEST_THRESH       2147483648
-//#define INGEST_THRESH       3221225472
-//#define INGEST_THRESH       4294967296
-//#define INGEST_THRESH       5368709120
-//#define INGEST_THRESH       10737418240
-//#define INGEST_THRESH       21474836480
 #define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
+
 //#define DEBUG
-#define NO_MMAP
 
 int count = 0;
 int count_emit = 0;
@@ -264,54 +257,47 @@ void *read_data( void *args)
     return (void *) nread;
 }
 
+
 /**
- * Sample application that requires explicit calling of MapReduce phases
- *      init()
- *      map()
- *      reduce()
- *  ... which allows multiple map rounds
+ *  \fn         run_phoenix
+ *  \brief      The main engine that calls Phoenix init(), map(), and reduce() functions.
+ *
+ *  \param[in]  path        The path to the input file or directory. 
+ *  \param[in]  disp_num    The number of results to display.
+ *  \param[in]  input_dir   A flag indicating the input is either a file or directory.
+ *
+ *  \return     A 0 on success and a -1 on a failure.
+ *
+ *  This is different than the origianl Phoenix word count application because we allow
+ *  the user to control the MapReduce functions. This allows us to call map() multiple 
+ *  time so that we can read and map() data in chunks. This flexibility gives us the
+ *  ability to run the read as a separate thread so that we don't remain idle while 
+ *  waiting for the disk. 
  *
  *  Notes
  *      - removed mmap because we can't mmap part of a file
  */
-int main(int argc, char *argv[]) 
-{
+int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     int fd;
-    char **fdata = (char **) malloc(NCHUNKS_MAX * sizeof(char *));       // One chunk for all mappers/reducers to process
-    char **start;
-    unsigned int disp_num;
-    struct stat finfo;
-    char * fname, * disp_num_str;
+    char **fdata = (char **) malloc(NCHUNKS_MAX * sizeof(char *)); // One chunk for all mappers/reducers to process
+    char **start;                                               // Pointer to start of the array of pointers; used for cleanup
     uint64_t chunk_size = 0;                                    // Where the chunks split
     uint64_t nread = 0;                                         // How much of the file we have read thus far
-    char *prev_fdata;                                           // Chunk of last round
+    char *prev_fdata;                                           // Chunk of last round (so we can stagger reads/map tasks)
+    char *fname;                                                
+    struct stat finfo;
     struct timespec begin, end, total_begin, total_end;
     int nchunks = 0;
 
     get_time (total_begin);
 
-    // Make sure a filename is specified
-    if (argv[1] == NULL)
-    {
-        printf("Wordcount USAGE: %s <filename> [Top # of results to display]\n", argv[0]);
-        exit(1);
-    }
-
-    printf("Wordcount: Running...\n");
-
-    // Get the input file
-    fname = argv[1];
-    disp_num_str = argv[2];
-    CHECK_ERROR((fd = open(fname, O_RDONLY)) < 0);
-    CHECK_ERROR(fstat(fd, &finfo) < 0);
-
-    // Get the number of results to display
-    CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
-      DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
-
     // Initialize the library
+    printf("Wordcount: Running...\n");
     printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
     get_time (begin);
+    fname = path;
+    CHECK_ERROR((fd = open(fname, O_RDONLY)) < 0);
+    CHECK_ERROR(fstat(fd, &finfo) < 0);
     start = fdata;
     std::vector<WordsMR::keyval> result;    
     WordsMR mapReduce(1024*1024);
@@ -328,7 +314,7 @@ int main(int argc, char *argv[])
     printf("nread = %lu bytes\n", (uint64_t) nread);
     nchunks++;
 
-    // We to process one chunk behind the current read 
+    // We process one chunk behind the current read 
     while( nread < (uint64_t) finfo.st_size) {
         pthread_t thread1;
         chunk_t chunk_args = {fd, 0, nread, NULL};
@@ -401,12 +387,54 @@ int main(int argc, char *argv[])
         free(fdata[i]);
     free(fdata);
     CHECK_ERROR(close(fd) < 0);
+
+    // Get final timings
     get_time(total_end);
     get_time(end);
     print_time("Wordcount: finalize", begin, end);
     print_time("Wordcount: total", total_begin, total_end);
 
     return 0;
+}
+
+int main(int argc, char *argv[]) 
+{
+    unsigned int disp_num;
+    char *disp_num_str = NULL;
+    char *path = NULL;
+    int c;
+    bool input_dir = false;
+
+    // Parse command line options
+    while ((c = getopt(argc, argv, "n:d")) != -1) {
+        switch(c) {
+        case 'n':
+            disp_num_str = optarg;
+            break;
+        case 'd':
+            input_dir = true;
+            break;
+        default: 
+            fprintf(stderr, "Wordcount USAGE: %s [options] path\n", argv[0]); 
+            fprintf(stderr, "\t Ex: %s -d /data1/data/randomtextwriter/\n", argv[0]); 
+            fprintf(stderr, "\t Ex: %s -n 20 /data1/data/randomtextwriter-input\n", argv[0]); 
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (optind >= argc) {
+        fprintf(stderr, "Expected argument after options\n");
+        exit(EXIT_FAILURE);
+    }
+    path = argv[optind];
+
+    // Get the number of results to display
+    CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
+      DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
+
+    printf("disp_num = %d; input_dir = %d; path = %s\n", disp_num, input_dir, path);
+
+    return run_phoenix(path, disp_num, input_dir);
 }
 
 
