@@ -50,12 +50,12 @@
 #include "map_reduce.h"
 #include "hdfs.h"
 
-#define INGEST_THRESH       10737418240
+#define INGEST_THRESH       1073741824
 #define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
 #define HASHES              "--------------------------------------------------"
 
-//#define DEBUG
+#define DEBUG
 
 int count = 0;
 int count_emit = 0;
@@ -81,11 +81,10 @@ struct wc_string {
 };
 
 struct chunk_t {
-    int fd;
+    char *filename;
     int id;                         // The nchunk
     uint64_t size;                  // Where the chunks split
     uint64_t fsize;                 // The size of the actual file
-    hdfsFile hdfs_f;                     // For HDFS file
     uint64_t nread;
     char *fdata;
 };
@@ -212,6 +211,35 @@ public:
  */
 
 /**
+ * \fn          construct_filename
+ * \brief       Build the filename from a directory input.
+ *
+ * param[in]    filename    Pointer to the space to fill.
+ * param[in]    path        The path to the input directory.
+ * param[in]    file_id     The number from the end of part.
+ *
+ * Go through the directory construct the correct filename
+ */
+void construct_filename (char *filename, char *path, int file_id) 
+{
+        char chunk_id[32];
+
+        strcpy(filename, path);
+        if (file_id < 10)
+            strcat(filename, "/part-0000");
+        else if (file_id < 100)
+            strcat(filename, "/part-000");
+        else if (file_id < 1000)
+            strcat(filename, "/part-00");
+        else {
+            fprintf(stderr, "Error: can't create filename\n");
+            exit(EXIT_FAILURE);
+        }
+        CHECK_ERROR(sprintf(chunk_id, "%d", file_id) < 0);
+        strcat(filename, chunk_id);
+}
+
+/**
  * \fn          get_fsize
  * \brief       Get the size of the input by opening all files.
  *
@@ -219,29 +247,14 @@ public:
  *
  * This is needed when we malloc everything.
  */
-uint64_t get_fsize(char *path) {
-    int fd = -1;
+uint64_t get_fsize(char *path) 
+{
     uint64_t input_size = 0;
 
     for (uint64_t i = 0; i < total_nchunks; i++) {
         char filename[32];
-        char chunk_id[32];
-        struct stat finfo;
 
-        // Go through the directory construct the correct filename
-        strcpy(filename, path);
-        if (i < 10)
-            strcat(filename, "/part-0000");
-        else if (i < 100)
-            strcat(filename, "/part-000");
-        else if (i < 1000)
-            strcat(filename, "/part-00");
-        else {
-            fprintf(stderr, "Error: can't create filename\n");
-            exit(EXIT_FAILURE);
-        }
-        CHECK_ERROR(sprintf(chunk_id, "%lu", i) < 0);
-        strcat(filename, chunk_id);
+        construct_filename (filename, path, i);
         
         // Fill in the chunk data
         if (hdfs_dir) {
@@ -249,16 +262,17 @@ uint64_t get_fsize(char *path) {
             input_size += (uint64_t) finfo->mSize;
         }
         else {
+            int fd = -1;
+            struct stat finfo;
+
             CHECK_ERROR((fd = open(filename, O_RDONLY)) < 0);
             CHECK_ERROR(fstat(fd, &finfo) < 0);
             input_size += finfo.st_size;
-
             CHECK_ERROR(close(fd) < 0);
         }
     }
 
     debug_printf("total input size = %lu\n", input_size);
-
     return input_size;
 }
 
@@ -272,78 +286,54 @@ uint64_t get_fsize(char *path) {
  * Note that this has not return value because we exit on failure. Note that we do some
  * crazy file manipulations here so we need to check to make sure that we close everything.
  *
- * TODO: ensure that we closed all the fds.
+ * TODO: We need to handle the case where the threshold is less than the file size
+ * TODO: Don't continually open the file when we need to do it once
+ *
  */
-void get_chunk(chunk_t *chunk, char* path) {
+void get_chunk(chunk_t *chunk, char* path) 
+{
 
     if (input_dir) {
-        char fname[LINE_MAX] = "";
-        char chunk_id[64] = "";
+        char filename[LINE_MAX] = "";
 
-        debug_printf("Parsing a directory\n");
-
-        // Check to see if we have a previous fd open
-        if (chunk->fd >= 0 || chunk->hdfs_f != NULL) {
-            if (hdfs_dir) {
-                CHECK_ERROR( hdfsCloseFile(hdfs, chunk->hdfs_f) < 0);
-            }
-            else {
-                CHECK_ERROR( close(chunk->fd) < 0);
-            }
-        }
-
-        // Go through the directory construct the correct filename
-        strcpy(fname, path);
-        if (chunk->id < 10)
-            strcat(fname, "/part-0000");
-        else if (chunk->id < 100)
-            strcat(fname, "/part-000");
-        else if (chunk->id < 1000)
-            strcat(fname, "/part-00");
-        else {
-            fprintf(stderr, "Error: can't create filename\n");
-            exit(EXIT_FAILURE);
-        }
-        CHECK_ERROR(sprintf(chunk_id, "%d", chunk->id) < 0);
-        strcat(fname, chunk_id);
-
-        // Fill in the chunk data
         if (hdfs_dir) {
-            hdfsFile f = hdfsOpenFile(hdfs, fname, O_RDONLY, 0, 0, 0);
-            hdfsFileInfo *finfo = hdfsGetPathInfo(hdfs, fname);
-            CHECK_ERROR( f == NULL);
-            CHECK_ERROR( finfo == NULL);
-            chunk->hdfs_f = f;
-            chunk->size = (uint64_t) finfo->mSize;
+            hdfsFileInfo *finfo;
+            uint64_t size = 0;
+            
+            debug_printf("Parsing an hdfs directory\n");
+
+            while (size < INGEST_THRESH) {
+                construct_filename(filename, path, chunk->id);
+                finfo = hdfsGetPathInfo(hdfs, filename);
+                CHECK_ERROR( finfo == NULL);
+                strcpy(chunk->filename, filename);
+                size += (uint64_t) finfo->mSize;
+            }
+
+            chunk->size = size;
 
             debug_printf("using hdfs; chunk size = %lu\n", chunk->size);
         }
         else {
             int fd = -1;
             struct stat finfo;
-            CHECK_ERROR((fd = open(fname, O_RDONLY)) < 0);
+
+            debug_printf("Parsing an ext4 directory\n");
+
+            construct_filename(filename, path, chunk->id);
+            CHECK_ERROR((fd = open(filename, O_RDONLY)) < 0);
             CHECK_ERROR(fstat(fd, &finfo) < 0);
-            chunk->fd = fd;
+            chunk->filename = filename;
             chunk->size = (uint64_t) finfo.st_size;
+            CHECK_ERROR(close(fd) < 0);
         }
     }    
     else {
-        int fd = -1;
         uint64_t split, init_split;
         char c = '\0';
 
         debug_printf("Parsing a file\n");
-
-        if (chunk->fd < 0) {
-            // The file has not been opened yet
-            struct stat finfo;
-
-            CHECK_ERROR((fd = open(path, O_RDONLY)) < 0);
-            CHECK_ERROR(fstat(fd, &finfo) < 0);
-            chunk->fd = fd; 
-            chunk->fsize = (uint64_t) finfo.st_size;
-        }
-    
+   
         // Try a naive split
         init_split = chunk->nread + INGEST_THRESH;
         debug_printf("\tinit_split = %lu, chunk->size = %lu\n", init_split, chunk->fsize);
@@ -353,12 +343,17 @@ void get_chunk(chunk_t *chunk, char* path) {
             chunk->size = (uint64_t) (chunk->fsize - chunk->nread);
         }
         else {
+            int fd = -1;
+
             // Otherwise return the next chunk size
+            CHECK_ERROR( (fd = open(path, O_RDONLY)) < 0);
             for (split = init_split; c != ' ' && c != '\n'; split++) 
-                CHECK_ERROR(pread(chunk->fd, &c, 1, split - 1) < 0);
+                CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
     
             debug_printf("\tchunk size = %lu\n", INGEST_THRESH + (split - init_split) - 1);
             chunk->size = (uint64_t) (INGEST_THRESH + (split - init_split) - 1);
+
+            CHECK_ERROR( close(fd) < 0);
         }
     }
 }
@@ -368,29 +363,51 @@ void get_chunk(chunk_t *chunk, char* path) {
  * \fn          read_chunk
  * \brief       Reads a chunk of data into memory.
  *
- * \param[in]   chunk   The chunk metadata, which tells where and want to read.
+ * \param[in]   chunk   The chunk metadata, which tells where and what to read.
  *
  * \return      The amount of data that we have read after the function exits.
  */
-uint64_t read_chunk(chunk_t *chunk)
+uint64_t read_chunk(chunk_t *chunk) 
 {
     uint64_t r = 0;
 
     CHECK_ERROR (chunk->fdata == NULL);
-    debug_printf("\t\tstarting to read chunk: pread - %d, fdata + r, %lu, %lu\n",
-            chunk->fd, chunk->size -r, chunk->nread + r);
+    debug_printf("\t\tstarting to read chunk: pread - %s, fdata + r, %lu, %lu\n",
+            chunk->filename, chunk->size - r, chunk->nread + r);
 
-    while(r < chunk->size) {
-        if (input_dir) {
-            if (hdfs_dir)
-                r += hdfsPread(hdfs, chunk->hdfs_f, r, chunk->fdata + r, chunk->size -r);
-            else
-                r += pread (chunk->fd, chunk->fdata + r, chunk->size -r, r);
+    //while(r < chunk->size) {
+    if (input_dir) {
+        if (hdfs_dir) {
+            hdfsFileInfo *finfo;
+            hdfsFile f;
+
+            CHECK_ERROR( (finfo = hdfsGetPathInfo(hdfs, chunk->filename)) == NULL);
+            CHECK_ERROR( (f = hdfsOpenFile(hdfs, chunk->filename, O_RDONLY, 0, 0, 0)) == NULL);
+            while (r < (uint64_t) finfo->mSize)
+                r += hdfsPread(hdfs, f, r, chunk->fdata + r, finfo->mSize - r);
+            CHECK_ERROR(hdfsCloseFile(hdfs, f) < 0);
         }
-        else
-            r += pread (chunk->fd, chunk->fdata + r, chunk->size - r, chunk->nread + r);
-        debug_printf("\t\tread %lu of %lu bytes\n", r, chunk->size);
+        else {
+            int fd = -1;
+            struct stat finfo;
+
+            CHECK_ERROR( (fd = open(chunk->filename, O_RDONLY)) < 0);
+            CHECK_ERROR( fstat(fd, &finfo) < 0);
+            while (r < chunk->size)
+                r += pread ( fd, chunk->fdata + r, finfo.st_size - r, r);
+            CHECK_ERROR( close(fd) < 0);
+        }
     }
+    else {
+        int fd = -1;
+        
+        CHECK_ERROR( (fd = open(chunk->filename, O_RDONLY)) < 0);
+        while (r < chunk->size)
+            r += pread (fd, chunk->fdata + r, chunk->size - r, chunk->nread + r);
+        CHECK_ERROR( close(fd) < 0);
+    }
+    debug_printf("\t\tread %lu of %lu bytes\n", r, chunk->size);
+    //}
 
     debug_printf("fdata (%lu bytes): \n##########\n%s\n##########\n\n", 
         (uint64_t) strlen(chunk->fdata), chunk->fdata);
@@ -403,12 +420,12 @@ uint64_t read_chunk(chunk_t *chunk)
 
 
 /**
- * \fn          read_data
+ * \fn          pthread_read 
  * \brief       Reads the data in a pthread function.
  *
  * This is pthread function (hence the void * return value and arguments).
  */
-void *read_data( void *args)
+void *pthread_read( void *args)
 {
     chunk_t *chunk_args = (chunk_t *) args;
 
@@ -442,10 +459,11 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     char **fdata = 
         (char **)malloc(NCHUNKS_MAX * sizeof(char *));          // One chunk for all mappers/reducers to process
     char **start;                                               // Pointer to start of the array of pointers; used for cleanup
-    char *fname;                                                
+    char *filename;                                                
     struct timespec begin, end, total_begin, total_end;
     int nchunks = 0;
-    chunk_t curr_chunk = {-1, 0, 0, 0, NULL};
+    char temp_filename[LINE_MAX] = "";
+    chunk_t curr_chunk = {temp_filename, 0, 0, 0, NULL};
 
     get_time (total_begin);
 
@@ -453,7 +471,7 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     printf("Wordcount: Running...\n");
     printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
     get_time (begin);
-    fname = path;
+    filename = path;
     std::vector<WordsMR::keyval> result;    
     WordsMR mapReduce(1024*1024);
     mapReduce.run_init();
@@ -471,11 +489,10 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
     curr_chunk.fdata = *fdata;
     read_chunk (&curr_chunk);
     nchunks++;
-    debug_printf("curr_chunk: fd = %d, id = %d, size = %lu, fsize = %lu, nread = %lu\n%s\n\n", 
-        curr_chunk.fd, curr_chunk.id, curr_chunk.size, curr_chunk.fsize, curr_chunk.nread, HASHES);
+    debug_printf("curr_chunk: filename = %s, id = %d, size = %lu, fsize = %lu, nread = %lu\n%s\n\n", 
+        curr_chunk.filename, curr_chunk.id, curr_chunk.size, curr_chunk.fsize, curr_chunk.nread, HASHES);
 
     // We process one chunk behind the current read 
-    //while(curr_chunk.nread < curr_chunk.fsize) {
     while(  (uint64_t)nchunks < total_nchunks &&
             curr_chunk.nread < curr_chunk.fsize) {
         pthread_t thread1;
@@ -491,7 +508,7 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
         *fdata++;
         *fdata = (char *)malloc(curr_chunk.size + 1);
         curr_chunk.fdata = *fdata;
-        CHECK_ERROR (pthread_create (&thread1, NULL, read_data, (void *) &curr_chunk) < 0);
+        CHECK_ERROR (pthread_create (&thread1, NULL, pthread_read, (void *) &curr_chunk) < 0);
 
         // Execution of the mappers continues in parallel with the read
         debug_printf("\tmaster thread runs mappers\n");
@@ -505,19 +522,14 @@ int run_phoenix(char *path, unsigned int disp_num, bool input_dir) {
         nchunks++;
 
         debug_printf("\tread thread returned\n");
-        debug_printf("\tcurr_chunk: fd = %d, id = %d, size = %lu, fsize = %lu, nread = %lu\n%s\n\n", 
-            curr_chunk.fd, curr_chunk.id, curr_chunk.size, curr_chunk.fsize, curr_chunk.nread, HASHES);
+        debug_printf("\tcurr_chunk: filename = %s, id = %d, size = %lu, fsize = %lu, nread = %lu\n%s\n\n", 
+            curr_chunk.filename, curr_chunk.id, curr_chunk.size, curr_chunk.fsize, curr_chunk.nread, HASHES);
     }
 
     // Compute on the last chunk
     mapReduce.set_data(curr_chunk.fdata, curr_chunk.size);
     CHECK_ERROR( mapReduce.run(result) < 0);
-    if (hdfs_dir) {
-        CHECK_ERROR( hdfsCloseFile(hdfs, curr_chunk.hdfs_f) < 0);
-    }
-    else {
-        CHECK_ERROR( close(curr_chunk.fd) < 0);
-    }
+
     get_time (end);
     print_time("Wordcount: mappers", begin, end);
 
@@ -613,6 +625,5 @@ int main(int argc, char *argv[])
 
     return run_phoenix(path, disp_num, input_dir);
 }
-
 
 // vim: ts=8 sw=4 sts=4 smarttab smartindent
