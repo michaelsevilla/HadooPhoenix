@@ -39,9 +39,11 @@ OS = -D_LINUX_
 DEBUG = -g
 #NUMA = -DNUMA_SUPPORT
 #CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing 
+#LIBS = -lpthread -lrt
 # Edited by msevilla, support for openmp
-CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp
-LIBS = -lpthread -lrt
+#CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp 
+CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp -I${JAVA_HOME}/include -I${JAVA_HOME}/include/linux -I${HADOOP_HOME}/src/c++/libhdfs -L${HADOOP_HOME}/c++/Linux-amd64-64/lib
+LIBS = -lpthread -lrt -lhdfs
 endif
 
 ifeq ($(OSTYPE),SunOS)
