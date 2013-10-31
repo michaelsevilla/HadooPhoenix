@@ -42,7 +42,7 @@ DEBUG = -g
 #LIBS = -lpthread -lrt
 # Edited by msevilla, support for openmp
 #CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp 
-CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp -I${JAVA_HOME}/include -I${JAVA_HOME}/include/linux -I${HADOOP_HOME}/src/c++/libhdfs -L${HADOOP_HOME}/c++/Linux-amd64-64/lib -std=c++0x
+CFLAGS = $(DEBUG) -Wall -O3 $(OS) $(NUMA) -DMMAP_POPULATE -fstrict-aliasing -Wstrict-aliasing -fopenmp -I${JAVA_HOME}/include -I${JAVA_HOME}/include/linux -I${HADOOP_PREFIX}/src/c++/libhdfs -L${HADOOP_PREFIX}/c++/Linux-amd64-64/lib -std=c++0x
 LIBS = -lpthread -lrt -lhdfs
 endif
 
