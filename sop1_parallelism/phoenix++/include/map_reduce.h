@@ -220,6 +220,9 @@ public:
     int run_init();
     int run_reducers(std::vector<keyval>& result);
 
+    int run_init();
+    int run_reducers(std::vector<keyval>& result);
+
     void emit_intermediate(typename container_type::input_type& i, 
         key_type const& k, value_type const& v) const {
 	i[k].add(v);
@@ -242,8 +245,8 @@ run_init ()
  * so that we can run the mappers multiple times
  */
 template<typename Impl, typename D, typename K, typename V, class Container>
-uint64_t MapReduce<Impl, D, K, V, Container>::
-get_nchunks (data_type *d)
+int MapReduce<Impl, D, K, V, Container>::
+run (std::vector<keyval>& result)
 {
     timespec begin;    
     std::vector<D> data;
@@ -267,6 +270,27 @@ get_nchunks (data_type *d)
         this->num_reduce_tasks = this->num_threads;
         printf ("num_map_tasks = %lu\n", num_map_tasks);
         printf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
+    
+        // Initialize important data structures
+        container.init(this->num_threads, this->num_reduce_tasks);
+        this->final_vals = new std::vector<keyval>[this->num_threads];
+        for(uint64_t i = 0; i < this->num_threads; i++) {
+            // Try to avoid a reallocation. Very costly on Solaris.
+            this->final_vals[i].reserve(100);
+        }
+
+        first = false;
+        print_time_elapsed("library init", begin);
+    }
+
+    if (first) {
+        get_time(begin);
+        // Compute task counts (should make this more adjustable) and then 
+        // allocate storage
+        this->num_map_tasks = std::min(count, this->num_threads) * 16;
+        this->num_reduce_tasks = this->num_threads;
+        dprintf ("num_map_tasks = %lu\n", num_map_tasks);
+        dprintf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
     
         // Initialize important data structures
         container.init(this->num_threads, this->num_reduce_tasks);
@@ -322,11 +346,6 @@ run (char *filename, std::vector<keyval>& result)
     int nread;
     timespec begin;    
 
-    // Read the first 100 characters
-    this->fdata = (char *) malloc(2*INGEST_THRESHOLD * sizeof(char));
-    memset(fdata, 0, 2*INGEST_THRESHOLD);
-    nread = read(fd, this->fdata, INGEST_THRESHOLD);
-
     // Create a thread to start mappers - it must be a thread because we have 
     // to shared the malloc'd data. We must pass the MapReduce instance to the 
     // thread
@@ -358,6 +377,18 @@ run_reducers (std::vector<keyval>& result)
     timespec begin;    
     timespec run_begin = get_time();
 
+    return 0;
+}
+
+/**
+ * Split this up so that we can call run_mappers multiple times
+ */
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_reducers (std::vector<keyval>& result)
+{
+    timespec begin;    
+    timespec run_begin = get_time();
     dprintf("In scheduler, all map tasks are done, now scheduling reduce tasks\n");
 
     // Run reduce tasks and get final values
