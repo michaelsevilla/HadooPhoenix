@@ -50,9 +50,6 @@
 #include "map_reduce.h"
 #include "hdfs.h"
 
-#define INGEST_THRESH       10737418240
-//#define INGEST_THRESH       2147483648
-//#define INGEST_THRESH       4294967296
 #define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
 #define HASHES              "--------------------------------------------------"
@@ -60,19 +57,19 @@
 //#define DEBUG
 
 // Some ill-advised global variables
-int count = 0;
-int count_emit = 0;
-bool input_dir = false;
-bool hdfs_dir = false;
+int count = -1;
+int count_emit = -1;
+bool use_hdfs = false;
 hdfsFS hdfs = NULL;
 
 // We could pass these around in functions but it is easier to for the thread to pull
 // these values instead of creating a new struct
 char path[LINE_MAX] = "";                           // The path to the file or directory
-uint64_t total_size = 0;                            // The size of the whole
+uint64_t total_size = -1;                            // The size of the whole
 
-uint64_t total_nfiles = 999999999;
-int ingest_files = 99999;
+uint64_t total_nfiles = -1;
+uint64_t ingest_thresh = -1;
+int ingest_files = -1;
 
 int debug_printf(const char *fmt, ...) {
 #ifdef DEBUG
@@ -94,6 +91,7 @@ struct chunk_t {
     int fileid;
     uint64_t size;              
     char *data;
+    uint64_t nread;
 };
 
 // a single null-terminated word
@@ -225,9 +223,10 @@ public:
  *
  * This makes the code a little cleaner
  */
-chunk_t *initialize_chunk(chunk_t *chunk, int id, int fileid) {
+chunk_t *initialize_chunk(chunk_t *chunk, int id, int fileid, uint64_t nread) {
     chunk->id = id;
     chunk->fileid = fileid;
+    chunk->nread = nread;
     chunk->size = 0;
     chunk->data = NULL;
 
@@ -279,11 +278,11 @@ uint64_t get_fsize(char *path)
 
     for (uint64_t i = 0; i < total_nfiles; i++) {
         char filename[32];
-
+ 
         construct_filename (filename, i);
         
         // Fill in the chunk data
-        if (hdfs_dir) {
+        if (use_hdfs) {
             hdfsFileInfo *finfo = NULL;
             
             CHECK_ERROR( (finfo = hdfsGetPathInfo(hdfs, filename)) == NULL);
@@ -319,89 +318,81 @@ uint64_t get_fsize(char *path)
  * We only open the file once.
  *
  * TODO: do we want to use the default values for the replication, block size, buffer size (open)
- * TODO: We need to handle the case where the threshold is less than the file size
  */
 int read_chunk(chunk_t *chunk)
 {
     char filename[LINE_MAX] = "";
+    uint64_t size = 0;
+    uint64_t nfiles = chunk->fileid;
 
-    if (input_dir) {
-        debug_printf("\t[read_chunk] reading from directory\n");
-        
-        uint64_t size = 0;
-        uint64_t nfiles = chunk->fileid;
-        
-        for (int i = 0; size < INGEST_THRESH && i < ingest_files; i++) {
-            char *tmp = NULL;
-            off_t fsize = 0;
-        
-            // This is initialized for both types... it is re-initialied at every loop
-            // anyways so we aren't wasting too much space.
-            int fd = -1;
-            hdfsFile hdfsF = NULL;
-        
-            if ((uint64_t) chunk->fileid >= total_nfiles) {
-                debug_printf("\t[read_chunk] read in the targeted number of files\n");
-                chunk->size = size;
-                return 0;
-            }
-        
-            construct_filename(filename, nfiles);
-            printf("filename = %s\n", filename);
-        
-            if (hdfs_dir) {
-                hdfsFileInfo *finfo = NULL;
-                CHECK_ERROR( (hdfsF = hdfsOpenFile(hdfs, filename, O_RDONLY, 0, 0, 0)) == NULL);
-                CHECK_ERROR( (finfo = hdfsGetPathInfo(hdfs, filename)) == NULL);
-                fsize = finfo->mSize;
-            }
-            else {
-                struct stat finfo;
-                CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
-                CHECK_ERROR( fstat(fd, &finfo) < 0);
-                fsize = finfo.st_size;
-            }
-        
-            tmp = chunk->data;
-            chunk->data = (char *)realloc(chunk->data, size + (uint64_t)fsize);
-            if (chunk->data == NULL) {
-                free(tmp);   
-                fprintf(stderr, "ERROR: can't reallocate memory\n");
-                exit(EXIT_FAILURE);
-            }
-        
-            debug_printf("\t[read_chunk] reading file %s (%lu bytes), mallocd %lu bytes\n", filename, fsize, size + fsize);
-        
-            // Read the chunk (right now, chunk = file size)
-            uint64_t r = 0;
-            while (r < (uint64_t) fsize) {
-                if (hdfs_dir) {
-                    r += hdfsPread(hdfs, hdfsF, r, chunk->data + r + size, fsize);
-                }
-                else {
-                    r += pread (fd, chunk->data + r + size, fsize, r);
-                }
-            }
-        
-            CHECK_ERROR( r != (uint64_t)fsize);
-        
-            if (hdfs_dir) {
-                CHECK_ERROR( hdfsCloseFile(hdfs, hdfsF) < 0);
-            }
-            else {
-                CHECK_ERROR( close(fd) < 0);
-            }
-        
-            size += fsize;
-            nfiles++;
-            chunk->fileid = nfiles;
+    debug_printf("\t[read_chunk] reading from directory\n");
+    for (int i = 0; i < ingest_files; i++) {
+        char *tmp = NULL;
+        off_t fsize = 0;
+    
+        // Initialized for both types (re-initialied every loop anyways)
+        int fd = -1;
+        hdfsFile hdfsF = NULL;
+    
+        if ((uint64_t) chunk->fileid >= total_nfiles) {
+            debug_printf("\t[read_chunk] read in the targeted number of files\n");
+            chunk->size = size;
+            return 0;
         }
-        
-        chunk->size = size;
+    
+        construct_filename(filename, nfiles);
+        printf("filename = %s\n", filename);
+    
+        if (use_hdfs) {
+            hdfsFileInfo *finfo = NULL;
+            CHECK_ERROR( (hdfsF = hdfsOpenFile(hdfs, filename, O_RDONLY, 0, 0, 0)) == NULL);
+            CHECK_ERROR( (finfo = hdfsGetPathInfo(hdfs, filename)) == NULL);
+            fsize = finfo->mSize;
+        }
+        else {
+            struct stat finfo;
+            CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
+            CHECK_ERROR( fstat(fd, &finfo) < 0);
+            fsize = finfo.st_size;
+        }
+    
+        tmp = chunk->data;
+        chunk->data = (char *)realloc(chunk->data, size + (uint64_t)fsize);
+        if (chunk->data == NULL) {
+            free(tmp);   
+            fprintf(stderr, "ERROR: can't reallocate memory\n");
+            exit(EXIT_FAILURE);
+        }
+    
+        debug_printf("\t[read_chunk] reading file %s (%lu bytes), mallocd %lu bytes\n", filename, fsize, size + fsize);
+    
+        // Read the chunk (right now, chunk = file size)
+        uint64_t r = 0;
+        while (r < (uint64_t) fsize && r < ingest_thresh) {
+            if (use_hdfs) {
+                r += hdfsPread(hdfs, hdfsF, r, chunk->data + r + size, fsize);
+            }
+            else {
+                r += pread (fd, chunk->data + r + size, fsize, r);
+            }
+        }
+        // TODO: Make the ingest threshold split on words!!!! AND fix how much we read (w
+        // e don't want to ahng
+        chunk->nread = chunk->nread + r;
+    
+        if (use_hdfs) {
+            CHECK_ERROR( hdfsCloseFile(hdfs, hdfsF) < 0);
+        }
+        else {
+            CHECK_ERROR( close(fd) < 0);
+        }
+    
+        size += fsize;
+        nfiles++;
+        chunk->fileid = nfiles;
     }
-    else {
-        debug_printf("\t[read_chunk] reading from a single file\n");
-    }
+    
+    chunk->size = size;
 
     return 0;
 }
@@ -431,7 +422,6 @@ void *pthread_read( void *args)
  *
  *  \param[in]  path        The path to the input file or directory. 
  *  \param[in]  disp_num    The number of results to display.
- *  \param[in]  input_dir   A flag indicating the input is either a file or directory.
  *
  *  \return     A 0 on success and a -1 on a failure.
  *
@@ -458,7 +448,7 @@ void *pthread_read( void *args)
  *
  * TODO: make the return value of read_chunk meaningful
  */
-int run_phoenix(unsigned int disp_num, bool input_dir) {
+int run_phoenix(unsigned int disp_num) {
     int nchunks = 0;                                            // Track the number of chunks
     uint64_t nread = 0;                                         // How much we've read
     chunk_t **chunks = NULL;
@@ -474,8 +464,7 @@ int run_phoenix(unsigned int disp_num, bool input_dir) {
     print_time("Wordcount: initialize libraries", begin, end);
 
     // Chunk data structures
-    if (input_dir)
-        total_size = get_fsize(path);
+    total_size = get_fsize(path);
     debug_printf("[run_phoenix] total size = %lu\n", total_size);
     chunks = (chunk_t **)calloc(NCHUNKS_MAX, 1);
     nchunks = 0;
@@ -488,7 +477,7 @@ int run_phoenix(unsigned int disp_num, bool input_dir) {
 
     // Read the first chunk
     *chunks = (chunk_t *)malloc(sizeof(chunk_t));
-    curr_chunk = initialize_chunk(*chunks, 0, 0);
+    curr_chunk = initialize_chunk(*chunks, 0, 0, 0);
     read_chunk(curr_chunk);
     nread += curr_chunk->size;
     nchunks++;
@@ -506,7 +495,7 @@ int run_phoenix(unsigned int disp_num, bool input_dir) {
 
         debug_printf("[run_phoenix] creating thread to read the next chunk\n");
         *chunks = (chunk_t *)malloc(sizeof(chunk_t));
-        curr_chunk = initialize_chunk(*chunks, nchunks, curr_chunk->fileid);
+        curr_chunk = initialize_chunk(*chunks, nchunks, curr_chunk->fileid, curr_chunk->nread);
         CHECK_ERROR (pthread_create (&thread1, NULL, pthread_read, (void *) curr_chunk) < 0);
 
         debug_printf("[run_phoenix] master thread runs mappers (in parallel w/ read)\n");
@@ -521,7 +510,8 @@ int run_phoenix(unsigned int disp_num, bool input_dir) {
         nread += (uint64_t) ret;
         nchunks++;
         *chunks++;
-        printf("nread = %lu\n", nread);
+
+        printf("nread (chunk %i) = %lu\n", nchunks, nread);
     }
 
     debug_printf("[run_phoenix] compute on the last chunk (since we read ahead)\n");
@@ -556,6 +546,9 @@ int run_phoenix(unsigned int disp_num, bool input_dir) {
         free(start[i]);
     }
     free(start);
+    if (use_hdfs) {
+        CHECK_ERROR( hdfsDisconnect(hdfs) < 0);
+    }
 
     get_time(total_end);
     get_time(end);
@@ -571,38 +564,46 @@ int main(int argc, char *argv[])
     char *disp_num_str = NULL;
     int c;
 
+    // Parameters that control read_chunk()
+    ingest_thresh = std::numeric_limits<uint64_t>::max();
+    ingest_files = 1;
+
     // Parse command line options
-    while ((c = getopt(argc, argv, "n:d:i:q:h")) != -1) {
+    while ((c = getopt(argc, argv, "n:i:qht:")) != -1) {
         switch(c) {
         case 'n':
             disp_num_str = optarg;
-            break;
-        case 'd':
-            input_dir = true;
-            total_nfiles = atoi(optarg);
             break;
         case 'i':
             ingest_files = atoi(optarg);
             break;
         case 'q':
-            input_dir = true;
-            hdfs_dir = true;
-            total_nfiles = atoi(optarg);
+            use_hdfs = true;
             hdfs = hdfsConnect("localhost", 54310);
             CHECK_ERROR( hdfs == NULL);
             break;
+        case 't':
+            ingest_thresh = atoi(optarg); 
+            ingest_files = std::numeric_limits<uint64_t>::max();
+            break;
         case 'h':
-            printf("Wordcount USAGE: %s [options] path\n\n", argv[0]);
+            printf("Wordcount USAGE: %s [options] <NFILES> <PATH>\n\n", argv[0]);
+            printf("Description\n");
+            printf("\tNFILES   The number of total files to process\n");
+            printf("\tPATH     Path to the directory to process part-* files\n");
             printf("Flags\n");
             printf("\t-h  \t Print this help menu\n");
             printf("\t-n i\t Display the top i results\n");
-            printf("\t-d i\t Use an input dir at path i (instead of a file)\n");
             printf("\t-i i\t Ingest i files at a time in parallel with mapeprs\n");
-            printf("\t-q i\t Use an input HDFS dir at path i\n");
-            printf("\t-w i\t Use local FS as tier between HFDS dir at path i\n");
+            printf("\t-q i\t Use an input HDFS directory at path i\n");
+            printf("\t-t i\t Use i as a threshold for chunking a file\n");
             printf("\n");
-            printf("Ex: %s -d 10 /data1/data/randomtextwriter/\n", argv[0]); 
-            printf("Ex: %s -n 20 /data1/data/randomtextwriter-input\n", argv[0]); 
+            printf("Examples:\n");
+            printf("\t%s -d 10 /data1/data/randomtextwriter/\n", argv[0]); 
+            printf("\t%s -n 20 /data1/data/randomtextwriter-input\n", argv[0]); 
+            printf("\n");
+            printf("*Note: you can no longer specify one file - you must give a\n");
+            printf("directory from which to read files part-*.\n");
             exit(EXIT_SUCCESS);
         default: 
             fprintf(stderr, "Wordcount USAGE: %s [options] path\n", argv[0]); 
@@ -610,19 +611,20 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (optind >= argc) {
-        fprintf(stderr, "Expected argument after options\n");
+    if (optind >= argc - 1) {
+        fprintf(stderr, "Expected argument(s) after options\n");
         exit(EXIT_FAILURE);
     }
-    strcpy(path, argv[optind]);
+    total_nfiles = atoi(argv[optind]);
+    strcpy(path, argv[optind + 1]);
 
     // Get the number of results to display
     CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
       DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
 
-    debug_printf("disp_num = %d; input_dir = %d; path = %s\n", disp_num, input_dir, path);
+    debug_printf("disp_num = %d; path = %s; total files = %lu\n", disp_num, path, total_nfiles);
 
-    return run_phoenix(disp_num, input_dir);
+    return run_phoenix(disp_num);
 }
 
 // vim: ts=8 sw=4 sts=4 smarttab smartindent

@@ -230,8 +230,8 @@ run (std::vector<keyval>& result)
         // allocate storage
         this->num_map_tasks = std::min(count, this->num_threads) * 16;
         this->num_reduce_tasks = this->num_threads;
-        printf ("num_map_tasks = %lu\n", num_map_tasks);
-        printf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
+        dprintf ("num_map_tasks = %lu\n", num_map_tasks);
+        dprintf ("num_reduce_tasks = %lu\n", num_reduce_tasks);
     
         // Initialize important data structures
         container.init(this->num_threads, this->num_reduce_tasks);
