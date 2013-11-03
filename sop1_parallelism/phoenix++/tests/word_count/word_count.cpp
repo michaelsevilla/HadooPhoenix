@@ -80,15 +80,6 @@ int debug_printf(const char *fmt, ...) {
     return 0;
 }
 
-int debug_printf(const char *fmt, ...) {
-#ifdef DEBUG
-    va_list args;
-    va_start(args, fmt);
-    return vprintf(fmt, args);
-#endif
-    return 0;
-}
-
 // a passage from the text. The input data to the Map-Reduce
 struct wc_string {
     char* data;
@@ -231,15 +222,15 @@ uint64_t find_split(int fd, uint64_t init_split, uint64_t nread, off_t fsize)
     char c = '\0';
 
     // Determine if we have reached the end of the file
-    if (nread + INGEST_THRESH >= (uint64_t) fsize)
+    if (nread + ingest_thresh >= (uint64_t) fsize)
         return (uint64_t) fsize - nread;
 
     // Otherwise return the next chunk size
     for (split = init_split; c != ' ' && c != '\n'; split++) 
         CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
 
-    debug_printf("\t\tchunk size = %lu\n", INGEST_THRESH + (split - init_split) - 1);
-    return INGEST_THRESH + (split - init_split) - 1;
+    debug_printf("\t\tchunk size = %lu\n", ingest_thresh + (split - init_split) - 1);
+    return ingest_thresh + (split - init_split) - 1;
 }
 
 /**
