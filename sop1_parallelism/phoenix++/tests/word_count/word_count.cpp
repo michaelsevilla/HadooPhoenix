@@ -60,14 +60,15 @@
 int count = -1;
 int count_emit = -1;
 bool use_hdfs = false;
+bool use_ingest_thresh = false;
 hdfsFS hdfs = NULL;
 
 // We could pass these around in functions but it is easier to for the thread to pull
 // these values instead of creating a new struct
-char path[LINE_MAX] = "";                           // The path to the file or directory
-uint64_t total_size = -1;                            // The size of the whole
+char path[LINE_MAX] = "";                   // The path to the file or directory
+uint64_t total_size = -1;                   // The size of the whole
 
-uint64_t total_nfiles = -1;
+int total_nfiles = -1;
 uint64_t ingest_thresh = -1;
 int ingest_files = -1;
 
@@ -221,16 +222,22 @@ uint64_t find_split(int fd, uint64_t init_split, uint64_t nread, off_t fsize)
     uint64_t split;
     char c = '\0';
 
+    debug_printf("\t\t[find_split] init_split = %lu, nread = %lu, fsize = %lu\n",
+        init_split, nread, fsize);
+
     // Determine if we have reached the end of the file
-    if (nread + ingest_thresh >= (uint64_t) fsize)
-        return (uint64_t) fsize - nread;
+    if (nread + ingest_thresh >= (uint64_t) fsize) {
+        debug_printf("\t\t[find_split] reached passed the end of file\n");
+        return (uint64_t) fsize;
+    }
 
     // Otherwise return the next chunk size
-    for (split = init_split; c != ' ' && c != '\n'; split++) 
+    for (split = init_split; c != ' ' && c != '\n'; split++) {
         CHECK_ERROR(pread(fd, &c, 1, split - 1) < 0);
+        debug_printf("\t\t[find_split] c = %c\n", c);
+    }
 
-    debug_printf("\t\tchunk size = %lu\n", ingest_thresh + (split - init_split) - 1);
-    return ingest_thresh + (split - init_split) - 1;
+    return split - 1;
 }
 
 /**
@@ -294,7 +301,7 @@ uint64_t get_fsize(char *path)
 {
     uint64_t input_size = 0;
 
-    for (uint64_t i = 0; i < total_nfiles; i++) {
+    for (int i = 0; i < total_nfiles; i++) {
         char filename[32];
  
         construct_filename (filename, i);
@@ -320,6 +327,47 @@ uint64_t get_fsize(char *path)
 
     debug_printf("\t[get_fsize] total input size = %lu\n", input_size);
     return input_size;
+}
+
+
+int read_chunk_thresh(chunk_t *chunk) {
+    int fd = -1; 
+    struct stat finfo;
+    uint64_t split = -1;
+    uint64_t size = -1;
+    char filename[LINE_MAX] = "";
+
+    debug_printf("\t[read_chunk_thresh] reading from a directory with an ingest threshold\n");
+
+    if (chunk->fileid >= total_nfiles) {
+        debug_printf("\t[read_chunk_thresh] read in the targeted number of files\n");
+        chunk->size = 0;
+        return 0;
+    }
+    construct_filename(filename, chunk->fileid); 
+    CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
+    CHECK_ERROR( fstat(fd, &finfo) < 0);
+
+    debug_printf("\t[read_chunk_thresh] chunk nread = %lu; file size = %lu \n", chunk->nread, finfo.st_size);
+    split = find_split(fd, chunk->nread + ingest_thresh, chunk->nread, finfo.st_size);
+    size = split - chunk->nread;
+    debug_printf("\t[read_chunk_thresh] split = %lu; size = %lu \n", split, size);
+
+    chunk->data = (char *)malloc(size + 1);
+
+    uint64_t r = 0;
+    while (r < size) {
+        r += pread (fd, chunk->data + r, size, chunk->nread + r);
+    }
+    chunk->nread = chunk->nread + r;
+
+    CHECK_ERROR( close(fd) < 0);
+    chunk->size = r;
+
+    debug_printf("\t[read_chunk_thresh] chunk size = %lu, chunk nread = %lu\n", 
+        chunk->size, chunk->nread);
+
+    return 0;
 }
 
 
@@ -352,7 +400,7 @@ int read_chunk(chunk_t *chunk)
         int fd = -1;
         hdfsFile hdfsF = NULL;
     
-        if ((uint64_t) chunk->fileid >= total_nfiles) {
+        if (chunk->fileid >= total_nfiles) {
             debug_printf("\t[read_chunk] read in the targeted number of files\n");
             chunk->size = size;
             return 0;
@@ -386,7 +434,7 @@ int read_chunk(chunk_t *chunk)
     
         // Read the chunk (right now, chunk = file size)
         uint64_t r = 0;
-        while (r < (uint64_t) fsize && r < ingest_thresh) {
+        while (r < (uint64_t) fsize) {
             if (use_hdfs) {
                 r += hdfsPread(hdfs, hdfsF, r, chunk->data + r + size, fsize);
             }
@@ -394,8 +442,6 @@ int read_chunk(chunk_t *chunk)
                 r += pread (fd, chunk->data + r + size, fsize, r);
             }
         }
-        // TODO: Make the ingest threshold split on words!!!! AND fix how much we read (w
-        // e don't want to ahng
         chunk->nread = chunk->nread + r;
     
         if (use_hdfs) {
@@ -427,7 +473,10 @@ void *pthread_read( void *args)
     chunk_t *chunk = (chunk_t *) args;
 
     debug_printf("\t[pthread_read] thread instructed to read\n");
-    read_chunk(chunk);
+    if (use_ingest_thresh)
+        read_chunk_thresh(chunk);
+    else
+        read_chunk(chunk);
     debug_printf("\t[pthread_read] thread read %lu bytes\n", chunk->size);
 
     return (void *) chunk->size;
@@ -496,7 +545,10 @@ int run_phoenix(unsigned int disp_num) {
     // Read the first chunk
     *chunks = (chunk_t *)malloc(sizeof(chunk_t));
     curr_chunk = initialize_chunk(*chunks, 0, 0, 0);
-    read_chunk(curr_chunk);
+    if (use_ingest_thresh)
+        read_chunk_thresh(curr_chunk);
+    else
+        read_chunk(curr_chunk);
     nread += curr_chunk->size;
     nchunks++;
     *chunks++;
@@ -558,7 +610,7 @@ int run_phoenix(unsigned int disp_num) {
         printf("%15s - %lu\n", result[result.size()-1-i].key.data, result[result.size()-1-i].val);
     printf("Total: %lu\n", total);
 
-   // Cleanup
+    // Cleanup
     for (int i = 0; i < nchunks; i++) {
         free(start[i]->data);
         free(start[i]);
@@ -601,8 +653,8 @@ int main(int argc, char *argv[])
             CHECK_ERROR( hdfs == NULL);
             break;
         case 't':
+            use_ingest_thresh = true;
             ingest_thresh = atoi(optarg); 
-            ingest_files = std::numeric_limits<uint64_t>::max();
             break;
         case 'h':
             printf("Wordcount USAGE: %s [options] <NFILES> <PATH>\n\n", argv[0]);
@@ -640,7 +692,8 @@ int main(int argc, char *argv[])
     CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
       DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
 
-    debug_printf("disp_num = %d; path = %s; total files = %lu\n", disp_num, path, total_nfiles);
+    debug_printf("disp_num = %d; path = %s; total files = %lu; ingest_thresh = %lu\n", 
+      disp_num, path, total_nfiles, ingest_thresh);
 
     return run_phoenix(disp_num);
 }

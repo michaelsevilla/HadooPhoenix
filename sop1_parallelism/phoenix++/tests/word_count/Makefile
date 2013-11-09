@@ -54,4 +54,4 @@ word_count-seq: $(WC_OBJS_SEQ)
 	$(CXX) $(CFLAGS) -c $< -o $@ -I$(HOME)/$(INC_DIR)
 
 clean:
-	rm -f $(PROGS) $(WC_OBJS)
+	rm -f $(PROGS) $(WC_OBJS) $(WC_OBJS_SEQ)
