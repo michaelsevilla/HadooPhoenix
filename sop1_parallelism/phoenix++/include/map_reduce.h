@@ -45,6 +45,7 @@
 
 // Edited by msevilla
 #include <parallel/algorithm>
+#include "read_chunk.h"
 
 template<typename Impl, typename D, typename K, typename V, 
     class Container = hash_container<K, V, buffer_combiner> >
