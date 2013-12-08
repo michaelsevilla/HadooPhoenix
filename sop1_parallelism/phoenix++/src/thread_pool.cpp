@@ -64,6 +64,7 @@ thread_pool::thread_pool(int num_threads, sched_policy const* policy)
 
 thread_pool::~thread_pool()
 {
+    printf("CALLED THREAD_POOL DESTRUCTOR\n");
     assert (this->die == 0);
 
     this->num_workers = this->num_threads;

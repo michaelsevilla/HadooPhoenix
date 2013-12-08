@@ -52,7 +52,7 @@
 #define DEFAULT_DISP_NUM    10
 #define HASHES              "--------------------------------------------------"
 
-//#define DEBUG
+#define DEBUG
 
 int debug_printf(const char *fmt, ...) {
 #ifdef DEBUG
@@ -405,66 +405,25 @@ void *pthread_read( void *args)
     return (void *) chunk->size;
 }
 
-
 /**
- *  \fn         run_job
- *  \brief      The main engine that calls Phoenix init(), map(), and reduce() functions.
- *
- *  \param[in]  job         The parameters to the job.
- *  \param[in]  disp_num    The number of results to display.
- *
- *  \return     A 0 on success and a -1 on a failure.
- *
- *  This is different than the origianl Phoenix word count application because we allow
- *  the user to control the MapReduce functions. This allows us to call map() multiple 
- *  time so that we can read and map() data in chunks. This flexibility gives us the
- *  ability to run the read as a separate thread so that we don't remain idle while 
- *  waiting for the disk. 
- *
- *  Notes
- *      - removed mmap because we can't mmap part of a file
- *
- *  Design
- *      read chunk 
- *      while nread < total size
- *          save old data, old size
- *
- *          create pthread
- *          nread += read chunk
- *
- *          run mappers (old data, old size)
- *
- *      run mappers
- *
- * TODO: make the return value of read_chunk meaningful
+ *  \fn         run_ingest_chunks
+ *  \brief      Calls multiple mappers and dumps to one data structure.
  */
-int run_job(job_state *job, unsigned int disp_num) 
+int run_ingest_chunks(job_state *job, WordsMR mapReduce, 
+    std::vector<WordsMR::keyval> &result, chunk_t **chunks, chunk_t **start)
 {
-    int nchunks = 0;                                            // Track the number of chunks
     uint64_t nread = 0;                                         // How much we've read
-    chunk_t **chunks = NULL;
-    chunk_t **start = NULL;                                     // Start of data chunk list; used for cleanup
-    chunk_t *curr_chunk;
-    struct timespec begin, end, total_begin, total_end;         // Timing data for debugging
+    int nchunks;
+    chunk_t *curr_chunk;                                        
+    struct timespec begin, end;
 
-    get_time (total_begin);
-    get_time (begin);
-
-    printf("Wordcount: Running...\n");
-    printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
-    print_time("Wordcount: initialize libraries", begin, end);
+    mapReduce.run_init();
 
     // Chunk data structures
     job->total_size = get_fsize(job);
     debug_printf("[run_phoenix] total size = %lu\n", job->total_size);
-    chunks = (chunk_t **)calloc(NCHUNKS_MAX, 1);
     nchunks = 0;
     start = chunks;
-
-    // Phoenix data structures
-    std::vector<WordsMR::keyval> result;    
-    WordsMR mapReduce(1024*1024);
-    mapReduce.run_init();
 
     // Read the first chunk
     *chunks = (chunk_t *)malloc(sizeof(chunk_t));
@@ -518,6 +477,62 @@ int run_job(job_state *job, unsigned int disp_num)
     get_time (end);
     print_time("Wordcount: reducers", begin, end);
 
+    return nchunks;
+}
+
+
+/**
+ *  \fn         run_job
+ *  \brief      The main engine that calls Phoenix init(), map(), and reduce() functions.
+ *
+ *  \param[in]  job         The parameters to the job.
+ *  \param[in]  disp_num    The number of results to display.
+ *
+ *  \return     A 0 on success and a -1 on a failure.
+ *
+ *  This is different than the origianl Phoenix word count application because we allow
+ *  the user to control the MapReduce functions. This allows us to call map() multiple 
+ *  time so that we can read and map() data in chunks. This flexibility gives us the
+ *  ability to run the read as a separate thread so that we don't remain idle while 
+ *  waiting for the disk. 
+ *
+ *  Notes
+ *      - removed mmap because we can't mmap part of a file
+ *
+ *  Design
+ *      read chunk 
+ *      while nread < total size
+ *          save old data, old size
+ *
+ *          create pthread
+ *          nread += read chunk
+ *
+ *          run mappers (old data, old size)
+ *
+ *      run mappers
+ *
+ * TODO: make the return value of read_chunk meaningful
+ */
+int run_job(job_state *job, unsigned int disp_num) 
+{
+    chunk_t **start = NULL;                                     // Start of data chunk list; used for cleanup
+    chunk_t **chunks = NULL;
+    int nchunks = 0;
+    struct timespec begin, end, total_begin, total_end;
+
+    get_time (total_begin);
+    get_time (begin);
+
+    printf("Wordcount: Running...\n");
+    printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
+    print_time("Wordcount: initialize libraries", begin, end);
+
+    // Phoenix data structures
+    std::vector<WordsMR::keyval> result;    
+    WordsMR mapReduce(1024*1024);
+    chunks = (chunk_t **)calloc(NCHUNKS_MAX, 1);
+    nchunks = run_ingest_chunks(job, mapReduce, result, chunks, start);
+
     // Print out the results
     printf("Wordcount: MapReduce Completed\n");
     get_time (begin);
@@ -532,15 +547,14 @@ int run_job(job_state *job, unsigned int disp_num)
     printf("Total: %lu\n", total);
 
     // Cleanup
-    for (int i = 0; i < nchunks; i++) {
-        free(start[i]->data);
-        free(start[i]);
-    }
-    free(start);
+    //for (int i = 0; i < nchunks; i++) {
+    //    free(start[i]->data);
+    //    free(start[i]);
+    //}
+    //free(start);
     if (job->hdfs != NULL) {
         CHECK_ERROR( hdfsDisconnect(job->hdfs) < 0);
     }
-
     get_time(total_end);
     get_time(end);
     print_time("Wordcount: finalize", begin, end);
