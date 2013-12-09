@@ -450,7 +450,7 @@ int run_ingest_chunks(job_state *job, WordsMR mapReduce,
 
         debug_printf("[run_phoenix] master thread runs mappers (in parallel w/ read)\n");
         mapReduce.set_data(prev_chunk->data, prev_chunk->size);
-        CHECK_ERROR( mapReduce.run(result) < 0);
+        CHECK_ERROR( mapReduce.run_mappers(result) < 0);
 
         debug_printf("[run_phoenix] waiting for read thread to join\n");
         pthread_join (thread1, &ret);
@@ -518,14 +518,15 @@ int run_job(job_state *job, unsigned int disp_num)
     chunk_t **start = NULL;                                     // Start of data chunk list; used for cleanup
     chunk_t **chunks = NULL;
     int nchunks = 0;
-    struct timespec begin, end, total_begin, total_end;
+    //struct timespec begin, end, total_begin, total_end;
 
-    get_time (total_begin);
-    get_time (begin);
+    //get_time (total_begin);
+    //get_time (begin);
 
     printf("Wordcount: Running...\n");
     printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
-    print_time("Wordcount: initialize libraries", begin, end);
+    //print_time("Wordcount: initialize libraries", begin, end);
+
 
     // Phoenix data structures
     std::vector<WordsMR::keyval> result;    
@@ -535,7 +536,7 @@ int run_job(job_state *job, unsigned int disp_num)
 
     // Print out the results
     printf("Wordcount: MapReduce Completed\n");
-    get_time (begin);
+    //get_time (begin);
     unsigned int dn = std::min(disp_num, (unsigned int)result.size());
     uint64_t total = 0;
     for(size_t i = 0; i < result.size(); i++)
@@ -555,16 +556,18 @@ int run_job(job_state *job, unsigned int disp_num)
     if (job->hdfs != NULL) {
         CHECK_ERROR( hdfsDisconnect(job->hdfs) < 0);
     }
-    get_time(total_end);
-    get_time(end);
-    print_time("Wordcount: finalize", begin, end);
-    print_time("Wordcount: total", total_begin, total_end);
+    //get_time(total_end);
+    //get_time(end);
+    //print_time("Wordcount: finalize", begin, end);
+    //print_time("Wordcount: total", total_begin, total_end);
 
     return 0;
 }
 
 int main(int argc, char *argv[]) 
 {
+    debug_printf("Trying to figure out callbacks\n");
+
     unsigned int disp_num;
     char *disp_num_str = NULL;
     int c;

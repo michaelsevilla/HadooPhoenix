@@ -124,6 +124,11 @@ protected:
     // the default split function...
     int split(data_type &a) { return 0; }
 
+    // the default set function
+    void set(char *_data, uint64_t length) const {
+        printf("[map_reduce.h] called the default set function\n");     
+    }
+
     // the default map function...
     void map(data_type const& a, map_container& m) const {}
     
@@ -187,7 +192,10 @@ public:
     // This version assumes that the split function is provided.
     int run(std::vector<keyval>& result);
 
+    // This initializes a container for multiple mappers
     int run_init();
+
+    
     int run_reducers(std::vector<keyval>& result);
 
     void emit_intermediate(typename container_type::input_type& i, 
@@ -200,7 +208,10 @@ template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
 run_init ()
 {
+    char *data = NULL;
+    uint64_t length = 0;
     first = true;
+    static_cast<Impl const*>(this)->set(data, length);
     return 0;
 }
 
