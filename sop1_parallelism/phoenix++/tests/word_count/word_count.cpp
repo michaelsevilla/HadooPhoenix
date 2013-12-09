@@ -48,34 +48,10 @@
 #include "map_reduce.h"
 #include "hdfs.h"
 
-#define NCHUNKS_MAX         10000
-#define DEFAULT_DISP_NUM    10
-#define HASHES              "--------------------------------------------------"
-
-#define DEBUG
-
-int debug_printf(const char *fmt, ...) {
-#ifdef DEBUG
-    va_list args;
-    va_start(args, fmt);
-    return vprintf(fmt, args);
-#endif
-    return 0;
-}
-
 // a passage from the text. The input data to the Map-Reduce
 struct wc_string {
     char* data;
     uint64_t len;
-};
-
-struct chunk_t {
-    job_state *job;
-    int id;
-    int fileid;
-    uint64_t size;              
-    char *data;
-    uint64_t nread;
 };
 
 // a single null-terminated word
@@ -195,290 +171,6 @@ public:
     }
 };
 
-/**
- * Helper functions
- */
-/**
- * \fn          initialize_chunk
- * \brief       Allocates space for a new chunk and initializes values.
- *
- * \param[in]   chunk       A pointer to the head of the chunk list
- * \param[in]   job         The state/global variables of the job.
- * \param[in]   id          The chunk number
- * \param[in]   fileid      The current file to read from
- * \param[in]   nread       How much we have read so far
- *
- * \return      A pointer to a new chunk.
- *
- * This makes the code a little cleaner
- */
-chunk_t *initialize_chunk(chunk_t *chunk, job_state *job, int id, int fileid, uint64_t nread) {
-    chunk->job = job;
-    chunk->id = id;
-    chunk->fileid = fileid;
-    chunk->nread = nread;
-    chunk->size = 0;
-    chunk->data = NULL;
-
-    return chunk;
-}
-
-
-/**
- * \fn          construct_filename
- * \brief       Build the filename from a directory input.
- *
- * \param[in]    job        The state/global variables of the job.
- * \param[in]    filename   Pointer to the space to fill.
- * \param[in]    path       The path to the input directory.
- * \param[in]    file_id    The number from the end of part.
- *
- * Go through the directory and construct the correct filename
- */
-void construct_filename (job_state *job, char *filename, int file_id) 
-{
-        char chunk_id[64] = "";
-
-        strcpy(filename, job->path);
-        if (file_id < 10)
-            strcat(filename, "/part-0000");
-        else if (file_id < 100)
-            strcat(filename, "/part-000");
-        else if (file_id < 1000)
-            strcat(filename, "/part-00");
-        else {
-            fprintf(stderr, "Error: can't create filename\n");
-            exit(EXIT_FAILURE);
-        }
-        CHECK_ERROR(sprintf(chunk_id, "%d", file_id) < 0);
-        strcat(filename, chunk_id);
-}
-
-
-/**
- * \fn          get_fsize
- * \brief       Get the size of the input by opening all files.
- *
- * \param[in]    job     The state/global variables of the job.
- *
- * This is needed so we know when to stop reading/chunking.
- */
-uint64_t get_fsize(job_state *job) 
-{
-    uint64_t input_size = 0;
-
-    for (int i = 0; i < job->total_nfiles; i++) {
-        char filename[32];
- 
-        construct_filename (job, filename, i);
-        
-        // Fill in the chunk data
-        if (job->hdfs != NULL) {
-            hdfsFileInfo *finfo = NULL;
-            
-            CHECK_ERROR( (finfo = hdfsGetPathInfo(job->hdfs, filename)) == NULL);
-            input_size += (uint64_t) finfo->mSize;
-        }
-        else {
-            int fd = -1;
-            struct stat finfo;
-            
-            debug_printf("\t[get_fsize] trying to open %s\n", filename);
-            CHECK_ERROR((fd = open(filename, O_RDONLY)) < 0);
-            CHECK_ERROR(fstat(fd, &finfo) < 0);
-            input_size += finfo.st_size;
-            CHECK_ERROR(close(fd) < 0);
-        }
-    }
-
-    debug_printf("\t[get_fsize] total input size = %lu\n", input_size);
-    return input_size;
-}
-
-
-/**
- * \fn          read_chunk
- * \brief       Reads a chunk of data into memory.
- *
- * \param[in]   job     The state/global variables of the job.
- * \param[in]   chunk   The chunk metadata, which tells where and what to read.
- *
- * \return      0 on success, < 0 on failure
- *
- * Determines how much to read (based on the ingest threshold and number of requested 
- * files. It also allocates space for the chunk data, which is free in the parent function.
- * We only open the file once.
- *
- * TODO: do we want to use the default values for the replication, block size, buffer size (open)
- */
-int read_chunk(job_state *job, chunk_t *chunk)
-{
-    char filename[LINE_MAX] = "";
-    uint64_t size = 0;
-    uint64_t nfiles = chunk->fileid;
-
-    debug_printf("\t[read_chunk] reading from directory\n");
-    for (int i = 0; i < job->ingest_files; i++) {
-        char *tmp = NULL;
-        off_t fsize = 0;
-    
-        // Initialized for both types (re-initialied every loop anyways)
-        int fd = -1;
-        hdfsFile hdfsF = NULL;
-    
-        if (chunk->fileid >= job->total_nfiles) {
-            debug_printf("\t[read_chunk] read in the targeted number of files\n");
-            chunk->size = size;
-            return 0;
-        }
-    
-        construct_filename(job, filename, nfiles);
-        printf("filename = %s\n", filename);
-    
-        if (job->hdfs != NULL) {
-            hdfsFileInfo *finfo = NULL;
-            CHECK_ERROR( (hdfsF = hdfsOpenFile(job->hdfs, filename, O_RDONLY, 0, 0, 0)) == NULL);
-            CHECK_ERROR( (finfo = hdfsGetPathInfo(job->hdfs, filename)) == NULL);
-            fsize = finfo->mSize;
-        }
-        else {
-            struct stat finfo;
-            CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
-            CHECK_ERROR( fstat(fd, &finfo) < 0);
-            fsize = finfo.st_size;
-        }
-    
-        tmp = chunk->data;
-        chunk->data = (char *)realloc(chunk->data, size + (uint64_t)fsize);
-        if (chunk->data == NULL) {
-            free(tmp);   
-            fprintf(stderr, "ERROR: can't reallocate memory\n");
-            exit(EXIT_FAILURE);
-        }
-    
-        debug_printf("\t[read_chunk] reading file %s (%lu bytes), mallocd %lu bytes\n", filename, fsize, size + fsize);
-    
-        // Read the chunk (right now, chunk = file size)
-        uint64_t r = 0;
-        while (r < (uint64_t) fsize) {
-            if (job->hdfs != NULL) {
-                r += hdfsPread(job->hdfs, hdfsF, r, chunk->data + r + size, fsize);
-            }
-            else {
-                r += pread (fd, chunk->data + r + size, fsize, r);
-            }
-        }
-        chunk->nread = chunk->nread + r;
-    
-        if (job->hdfs != NULL) {
-            CHECK_ERROR( hdfsCloseFile(job->hdfs, hdfsF) < 0);
-        }
-        else {
-            CHECK_ERROR( close(fd) < 0);
-        }
-    
-        size += fsize;
-        nfiles++;
-        chunk->fileid = nfiles;
-    }
-    
-    chunk->size = size;
-
-    return 0;
-}
-
-
-/**
- * \fn          pthread_read 
- * \brief       Reads the data in a pthread function.
- *
- * This is pthread function (hence the void * return value and arguments).
- */
-void *pthread_read( void *args)
-{
-    chunk_t *chunk = (chunk_t *) args;
-
-    debug_printf("\t[pthread_read] thread instructed to read\n");
-    read_chunk(chunk->job, chunk);
-    debug_printf("\t[pthread_read] thread read %lu bytes\n", chunk->size);
-
-    return (void *) chunk->size;
-}
-
-/**
- *  \fn         run_ingest_chunks
- *  \brief      Calls multiple mappers and dumps to one data structure.
- */
-int run_ingest_chunks(job_state *job, WordsMR mapReduce, 
-    std::vector<WordsMR::keyval> &result, chunk_t **chunks, chunk_t **start)
-{
-    uint64_t nread = 0;                                         // How much we've read
-    int nchunks;
-    chunk_t *curr_chunk;                                        
-    struct timespec begin, end;
-
-    mapReduce.run_init();
-
-    // Chunk data structures
-    job->total_size = get_fsize(job);
-    debug_printf("[run_phoenix] total size = %lu\n", job->total_size);
-    nchunks = 0;
-    start = chunks;
-
-    // Read the first chunk
-    *chunks = (chunk_t *)malloc(sizeof(chunk_t));
-    curr_chunk = initialize_chunk(*chunks, job, 0, 0, 0);
-    read_chunk(job, curr_chunk);
-    nread += curr_chunk->size;
-    nchunks++;
-    *chunks++;
-
-    printf("nread (chunk %i) = %lu\n", nchunks, nread);
-    debug_printf("[run_phoenix] curr_chunk stats \n\tid = %d, size = %lu, size = %lu, nread = %lu\n%s\n\n", 
-        curr_chunk->id, curr_chunk->size, curr_chunk->size, nread, HASHES);
-
-    // We process one chunk behind the current read 
-    while (nread < job->total_size) {
-        pthread_t thread1;
-        void *ret; 
-        chunk_t *prev_chunk = curr_chunk;
-
-        debug_printf("[run_phoenix] creating thread to read the next chunk\n");
-        *chunks = (chunk_t *)malloc(sizeof(chunk_t));
-        curr_chunk = initialize_chunk(*chunks, job, nchunks, curr_chunk->fileid, curr_chunk->nread);
-        CHECK_ERROR (pthread_create (&thread1, NULL, pthread_read, (void *) curr_chunk) < 0);
-
-        debug_printf("[run_phoenix] master thread runs mappers (in parallel w/ read)\n");
-        mapReduce.set_data(prev_chunk->data, prev_chunk->size);
-        CHECK_ERROR( mapReduce.run_mappers(result) < 0);
-
-        debug_printf("[run_phoenix] waiting for read thread to join\n");
-        pthread_join (thread1, &ret);
-        debug_printf("[run_phoenix] read thread joined\n");
-
-        // Cleanup and prepare for next iteration
-        nread += (uint64_t) ret;
-        nchunks++;
-        *chunks++;
-
-        printf("nread (chunk %i) = %lu\n", nchunks, nread);
-    }
-
-    debug_printf("[run_phoenix] compute on the last chunk (since we read ahead)\n");
-    mapReduce.set_data(curr_chunk->data, curr_chunk->size);
-    CHECK_ERROR( mapReduce.run(result) < 0);
-
-    get_time (end);
-    print_time("Wordcount: mappers", begin, end);
-
-    debug_printf("[run_phoenix] all mappers done, start reducers\n");
-    get_time (begin);
-    CHECK_ERROR( mapReduce.run_reducers(result) < 0);
-    get_time (end);
-    print_time("Wordcount: reducers", begin, end);
-
-    return nchunks;
-}
 
 
 /**
@@ -532,7 +224,9 @@ int run_job(job_state *job, unsigned int disp_num)
     std::vector<WordsMR::keyval> result;    
     WordsMR mapReduce(1024*1024);
     chunks = (chunk_t **)calloc(NCHUNKS_MAX, 1);
-    nchunks = run_ingest_chunks(job, mapReduce, result, chunks, start);
+    nchunks = mapReduce.run_ingest_chunks(job, result, chunks, start);
+    free(chunks);
+    free(start);
 
     // Print out the results
     printf("Wordcount: MapReduce Completed\n");
@@ -547,12 +241,7 @@ int run_job(job_state *job, unsigned int disp_num)
         printf("%15s - %lu\n", result[result.size()-1-i].key.data, result[result.size()-1-i].val);
     printf("Total: %lu\n", total);
 
-    // Cleanup
-    //for (int i = 0; i < nchunks; i++) {
-    //    free(start[i]->data);
-    //    free(start[i]);
-    //}
-    //free(start);
+    free(start);
     if (job->hdfs != NULL) {
         CHECK_ERROR( hdfsDisconnect(job->hdfs) < 0);
     }

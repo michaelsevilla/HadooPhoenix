@@ -125,9 +125,7 @@ protected:
     int split(data_type &a) { return 0; }
 
     // the default set function
-    void set(char *_data, uint64_t length) const {
-        printf("[map_reduce.h] called the default set function\n");     
-    }
+    void set_data(char *_data, uint64_t length) const {}
 
     // the default map function...
     void map(data_type const& a, map_container& m) const {}
@@ -192,11 +190,15 @@ public:
     // This version assumes that the split function is provided.
     int run(std::vector<keyval>& result);
 
-    // This initializes a container for multiple mappers
+    /* This is an alternate MapReduce engine that breaks down the process 
+     * into multiple steps so that we can dump all the intermediate keys
+     * into one bucket. This allows us to implement ingest chunks.
+     */
     int run_init();
-
-    
+    int run_mappers(std::vector<keyval>& result);
     int run_reducers(std::vector<keyval>& result);
+    int run_ingest_chunks(job_state *job, std::vector<keyval>& result, 
+        chunk_t **chunks, chunk_t **start);
 
     void emit_intermediate(typename container_type::input_type& i, 
         key_type const& k, value_type const& v) const {
@@ -208,13 +210,20 @@ template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
 run_init ()
 {
-    char *data = NULL;
-    uint64_t length = 0;
     first = true;
-    static_cast<Impl const*>(this)->set(data, length);
     return 0;
 }
 
+/**
+ * This should be refilled with the original run() command. You know, it's 
+ * important to preserve backwards compatiability. 
+ */
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run (std::vector<keyval>& result)
+{
+    return 0;
+}
 
 /**
  * Need to move this up here so that we can split up the map/reduce functions
@@ -222,7 +231,7 @@ run_init ()
  */
 template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
-run (std::vector<keyval>& result)
+run_mappers (std::vector<keyval>& result)
 {
     timespec begin;    
     std::vector<D> data;
@@ -304,6 +313,91 @@ run_reducers (std::vector<keyval>& result)
     print_time_elapsed("run time", run_begin);
     return 0;
 }
+
+
+/**
+ *  \fn         run_ingest_chunks
+ *  \brief      Calls multiple mappers and dumps to one data structure.
+ */
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run_ingest_chunks(job_state *job, std::vector<keyval>& result, 
+    chunk_t **chunks, chunk_t **start)
+{
+    uint64_t nread = 0;                                         // How much we've read
+    int nchunks = 0;
+    chunk_t *curr_chunk;                                        
+    struct timespec begin, end;
+
+    this->run_init();
+
+    // Chunk data structures
+    job->total_size = get_fsize(job);
+    debug_printf("[run_ingest_chunks] total size = %lu\n", job->total_size);
+    start = chunks;
+
+    // Read the first chunk
+    *chunks = (chunk_t *)malloc(sizeof(chunk_t));
+    curr_chunk = initialize_chunk(*chunks, job, 0, 0, 0);
+    read_chunk(job, curr_chunk);
+    nread += curr_chunk->size;
+    nchunks++;
+    *chunks++;
+
+    printf("nread (chunk %i) = %lu\n", nchunks, nread);
+    debug_printf("[run_ingest_chunks] curr_chunk stats \n\tid = %d, size = %lu, size = %lu, nread = %lu\n%s\n\n", 
+        curr_chunk->id, curr_chunk->size, curr_chunk->size, nread, HASHES);
+
+    // We process one chunk behind the current read 
+    while (nread < job->total_size) {
+        pthread_t thread1;
+        void *ret; 
+        chunk_t *prev_chunk = curr_chunk;
+
+        debug_printf("[run_ingest_chunks] creating thread to read the next chunk\n");
+        *chunks = (chunk_t *)malloc(sizeof(chunk_t));
+        curr_chunk = initialize_chunk(*chunks, job, nchunks, curr_chunk->fileid, curr_chunk->nread);
+        CHECK_ERROR (pthread_create (&thread1, NULL, pthread_read, (void *) curr_chunk) < 0);
+
+        debug_printf("[run_ingest_chunks] master thread runs mappers (in parallel w/ read)\n");
+        static_cast<Impl const*>(this)->set_data(prev_chunk->data, prev_chunk->size);
+        CHECK_ERROR( this->run_mappers(result) < 0);
+
+        debug_printf("[run_ingest_chunks] waiting for read thread to join\n");
+        pthread_join (thread1, &ret);
+        debug_printf("[run_ingest_chunks] read thread joined\n");
+
+        // Cleanup and prepare for next iteration
+        nread += (uint64_t) ret;
+        nchunks++;
+        *chunks++;
+
+        printf("nread (chunk %i) = %lu\n", nchunks, nread);
+    }
+
+    debug_printf("[run_ingest_chunks] compute on the last chunk (since we read ahead)\n");
+    static_cast<Impl const*>(this)->set_data(curr_chunk->data, curr_chunk->size);
+    CHECK_ERROR( this->run_mappers(result) < 0);
+
+    get_time (end);
+    print_time("Wordcount: mappers", begin, end);
+
+    debug_printf("[run_ingest_chunks] all mappers done, start reducers\n");
+    get_time (begin);
+    CHECK_ERROR( this->run_reducers(result) < 0);
+    get_time (end);
+    print_time("Wordcount: reducers", begin, end);
+
+    // Cleanup
+    for (int i = 0; i < nchunks; i++) {
+        free(start[i]->data);
+        //free(start[i]);
+    }
+
+    return nchunks;
+}
+
+
 /**
  * Run map tasks and get intermediate values
  */
