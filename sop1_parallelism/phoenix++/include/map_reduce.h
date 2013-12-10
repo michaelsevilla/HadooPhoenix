@@ -388,12 +388,6 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
     get_time (end);
     print_time("Wordcount: reducers", begin, end);
 
-    // Cleanup
-    for (int i = 0; i < nchunks; i++) {
-        free(start[i]->data);
-        //free(start[i]);
-    }
-
     return nchunks;
 }
 

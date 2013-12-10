@@ -225,8 +225,6 @@ int run_job(job_state *job, unsigned int disp_num)
     WordsMR mapReduce(1024*1024);
     chunks = (chunk_t **)calloc(NCHUNKS_MAX, 1);
     nchunks = mapReduce.run_ingest_chunks(job, result, chunks, start);
-    free(chunks);
-    free(start);
 
     // Print out the results
     printf("Wordcount: MapReduce Completed\n");
@@ -241,10 +239,16 @@ int run_job(job_state *job, unsigned int disp_num)
         printf("%15s - %lu\n", result[result.size()-1-i].key.data, result[result.size()-1-i].val);
     printf("Total: %lu\n", total);
 
-    free(start);
-    if (job->hdfs != NULL) {
-        CHECK_ERROR( hdfsDisconnect(job->hdfs) < 0);
+    // Cleanup
+    for (int i = 0; i < nchunks; i++) {
+        free(chunks[i]->data);
+        free(chunks[i]);
     }
+    free(chunks);
+
+    //if (job->hdfs != NULL) {
+    //    CHECK_ERROR( hdfsDisconnect(job->hdfs) < 0);
+    //}
     //get_time(total_end);
     //get_time(end);
     //print_time("Wordcount: finalize", begin, end);
