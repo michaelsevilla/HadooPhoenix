@@ -187,14 +187,8 @@ int read_chunk(job_state *job, chunk_t *chunk)
             fsize = finfo.st_size;
         }
 
-        uint64_t r = chunk->nread;
-        uint64_t end = 0;
-        if (job->ingest_bytes > 0)
-            end = std::min((uint64_t) fsize - r, job->ingest_bytes);
-        else
-            end = fsize;
         tmp = chunk->data;
-        chunk->data = (char *)realloc(chunk->data, size + end);
+        chunk->data = (char *)realloc(chunk->data, size + fsize);
         if (chunk->data == NULL) {
             free(tmp);   
             fprintf(stderr, "ERROR: can't reallocate memory\n");
@@ -204,12 +198,13 @@ int read_chunk(job_state *job, chunk_t *chunk)
         debug_printf("\t[read_chunk] reading file %s (%lu bytes), mallocd %lu bytes\n", filename, fsize, size + fsize);
     
         // Read the chunk (right now, chunk = file size)
-        while (r < end) {
+        uint64_t r = 0;
+        while (r < (uint64_t) fsize) {
             if (job->hdfs != NULL) {
-                r += hdfsPread(job->hdfs, hdfsF, r, chunk->data + r + size, end);
+                r += hdfsPread(job->hdfs, hdfsF, r, chunk->data + r + size, fsize);
             }
             else {
-                r += pread (fd, chunk->data + r + size, end, r);
+                r += pread (fd, chunk->data + r + size, fsize, r);
             }
         }
         //chunk->nread = chunk->nread + r;
@@ -223,9 +218,7 @@ int read_chunk(job_state *job, chunk_t *chunk)
         }
     
         size += fsize;
-        if (r < (uint64_t) fsize) {
-            nfiles++;
-        }
+        nfiles++;
         chunk->fileid = nfiles;
     }
     
