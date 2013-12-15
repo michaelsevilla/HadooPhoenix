@@ -194,9 +194,8 @@ public:
      * into multiple steps so that we can dump all the intermediate keys
      * into one bucket. This allows us to implement ingest chunks.
      */
-    int run_init();
-    int run_mappers(std::vector<keyval>& result);
-    int run_reducers(std::vector<keyval>& result);
+    void run_mappers(std::vector<keyval>& result);
+    void run_reducers(std::vector<keyval>& result);
     int run_ingest_chunks(job_state *job, std::vector<keyval>& result, 
         chunk_t **chunks, chunk_t **start);
 
@@ -208,29 +207,85 @@ public:
 
 template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
-run_init ()
+run (std::vector<keyval>& result)
 {
-    first = true;
+    timespec begin;    
+    std::vector<D> data;
+    uint64_t count;
+    D chunk;
+
+    // Run splitter to generate chunks
+    get_time (begin);
+    while (static_cast<Impl const*>(this)->split(chunk))
+    {
+        data.push_back(chunk);
+    }
+    count = data.size();
+    print_time_elapsed("split phase", begin);
+
+    return run(&data[0], count, result);
+}
+
+template<typename Impl, typename D, typename K, typename V, class Container>
+int MapReduce<Impl, D, K, V, Container>::
+run (D *data, uint64_t count, std::vector<keyval>& result)
+{
+    timespec begin;    
+    timespec run_begin = get_time();
+    // Initialize library
+    get_time (begin);
+
+    // Compute task counts (should make this more adjustable) and then 
+    // allocate storage
+    //this->num_map_tasks = std::min(count, this->num_threads);
+    this->num_map_tasks = std::min(count, this->num_threads) * 16;
+    this->num_reduce_tasks = this->num_threads;
+    dprintf ("num_map_tasks = %d\n", num_map_tasks);
+    dprintf ("num_reduce_tasks = %d\n", num_reduce_tasks);
+
+    container.init(this->num_threads, this->num_reduce_tasks);
+    this->final_vals = new std::vector<keyval>[this->num_threads];
+    for(uint64_t i = 0; i < this->num_threads; i++) {
+        // Try to avoid a reallocation. Very costly on Solaris.
+        this->final_vals[i].reserve(100);
+    }
+    print_time_elapsed("library init", begin);
+
+    // Run map tasks and get intermediate values
+    get_time (begin);
+    run_map(&data[0], count);
+    print_time_elapsed("map phase", begin);
+
+    dprintf("In scheduler, all map tasks are done, now scheduling reduce tasks\n");
+
+    // Run reduce tasks and get final values
+    get_time (begin);
+    run_reduce();
+    print_time_elapsed("reduce phase", begin);
+
+    dprintf("In scheduler, all reduce tasks are done, now scheduling merge tasks\n");
+
+    get_time (begin);
+    run_merge();
+    print_time_elapsed("merge phase", begin);
+    
+    result.swap(*this->final_vals);
+    
+    // Delete structures
+    delete [] this->final_vals;
+    
+    print_time_elapsed("run time", run_begin);
+
     return 0;
 }
 
-/**
- * This should be refilled with the original run() command. You know, it's 
- * important to preserve backwards compatiability. 
- */
-template<typename Impl, typename D, typename K, typename V, class Container>
-int MapReduce<Impl, D, K, V, Container>::
-run (std::vector<keyval>& result)
-{
-    return 0;
-}
 
 /**
  * Need to move this up here so that we can split up the map/reduce functions
  * so that we can run the mappers multiple times
  */
 template<typename Impl, typename D, typename K, typename V, class Container>
-int MapReduce<Impl, D, K, V, Container>::
+void MapReduce<Impl, D, K, V, Container>::
 run_mappers (std::vector<keyval>& result)
 {
     timespec begin;    
@@ -266,28 +321,14 @@ run_mappers (std::vector<keyval>& result)
         print_time_elapsed("library init", begin);
     }
 
-    return run(&data[0], count, result);
-}
-
-template<typename Impl, typename D, typename K, typename V, class Container>
-int MapReduce<Impl, D, K, V, Container>::
-run (D *data, uint64_t count, std::vector<keyval>& result)
-{
-    timespec begin;    
-
-    // Run map tasks and get intermediate values
-    get_time (begin);
     run_map(&data[0], count);
-    print_time_elapsed("map phase", begin);
-
-    return 0;
 }
 
 /**
  * Split this up so that we can call run_mappers multiple times
  */
 template<typename Impl, typename D, typename K, typename V, class Container>
-int MapReduce<Impl, D, K, V, Container>::
+void MapReduce<Impl, D, K, V, Container>::
 run_reducers (std::vector<keyval>& result)
 {
     timespec begin;    
@@ -311,13 +352,28 @@ run_reducers (std::vector<keyval>& result)
     delete [] this->final_vals;
     
     print_time_elapsed("run time", run_begin);
-    return 0;
 }
 
 
 /**
  *  \fn         run_ingest_chunks
  *  \brief      Calls multiple mappers and dumps to one data structure.
+ *
+ *
+ *  Notes
+ *      - removed mmap because we can't mmap part of a file
+ *
+ *  Design
+ *      read chunk 
+ *      while nread < total size
+ *          save old data, old size
+ *
+ *          create pthread
+ *          nread += read chunk
+ *
+ *          run mappers (old data, old size)
+ *
+ *      run mappers
  */
 template<typename Impl, typename D, typename K, typename V, class Container>
 int MapReduce<Impl, D, K, V, Container>::
@@ -329,11 +385,10 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
     chunk_t *curr_chunk;                                        
     struct timespec begin, end;
 
-    this->run_init();
-
     // Chunk data structures
     job->total_size = get_fsize(job);
     debug_printf("[run_ingest_chunks] total size = %lu\n", job->total_size);
+    this->first = true;
     start = chunks;
 
     // Read the first chunk
@@ -361,7 +416,7 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
 
         debug_printf("[run_ingest_chunks] master thread runs mappers (in parallel w/ read)\n");
         static_cast<Impl const*>(this)->set_data(prev_chunk->data, prev_chunk->size);
-        CHECK_ERROR( this->run_mappers(result) < 0);
+        this->run_mappers(result);
 
         debug_printf("[run_ingest_chunks] waiting for read thread to join\n");
         pthread_join (thread1, &ret);
@@ -377,14 +432,14 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
 
     debug_printf("[run_ingest_chunks] compute on the last chunk (since we read ahead)\n");
     static_cast<Impl const*>(this)->set_data(curr_chunk->data, curr_chunk->size);
-    CHECK_ERROR( this->run_mappers(result) < 0);
+    this->run_mappers(result);
 
     get_time (end);
     print_time("Wordcount: mappers", begin, end);
 
     debug_printf("[run_ingest_chunks] all mappers done, start reducers\n");
     get_time (begin);
-    CHECK_ERROR( this->run_reducers(result) < 0);
+    this->run_reducers(result);
     get_time (end);
     print_time("Wordcount: reducers", begin, end);
 

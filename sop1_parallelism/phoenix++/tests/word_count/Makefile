@@ -35,8 +35,9 @@ LIBS += -L$(HOME)/$(LIB_DIR) -l$(PHOENIX)
 
 WC_OBJS := word_count.o
 WC_OBJS_SEQ := word_count-seq.o
+WC_OBJS_INGEST := word_count-ingest.o
 
-PROGS := word_count word_count-seq
+PROGS := word_count word_count-seq word_count-ingest
 
 .PHONY: default all clean
 
@@ -50,8 +51,11 @@ word_count: $(WC_OBJS) $(LIB_DEP)
 word_count-seq: $(WC_OBJS_SEQ)
 	$(CXX) $(CFLAGS) -g -o $@ $(WC_OBJS_SEQ) $(LIBS)
 
+word_count-ingest: $(WC_OBJS_INGEST)
+	$(CXX) $(CFLAGS) -g -o $@ $(WC_OBJS_INGEST) $(LIBS)
+
 %.o: %.cpp
 	$(CXX) $(CFLAGS) -c $< -o $@ -I$(HOME)/$(INC_DIR)
 
 clean:
-	rm -f $(PROGS) $(WC_OBJS) $(WC_OBJS_SEQ)
+	rm -f $(PROGS) $(WC_OBJS) $(WC_OBJS_SEQ) $(WC_OBJS_INGEST)

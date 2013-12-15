@@ -1,8 +1,3 @@
-/** * Edited by msevilla for a scale-up vs. scale-out study.
- * edited on dexter
- */
-
-
 /* Copyright (c) 2007-2011, Stanford University
 * All rights reserved.
 *
@@ -31,15 +26,10 @@
 
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
 #include <ctype.h>
-#include <pthread.h>
-#define __STDC_FORMAT_MACROS
-#include <inttypes.h>
-#include <stdarg.h>
+#include <limits.h>
 
 #ifdef TBB
 #include "tbb/scalable_allocator.h"
@@ -47,6 +37,14 @@
 
 #include "map_reduce.h"
 #include "hdfs.h"
+
+
+#define DEFAULT_DISP_NUM 10
+
+int total_nfiles = 0;
+bool hdfs_dir = false;
+hdfsFS hdfs = NULL;
+
 
 // a passage from the text. The input data to the Map-Reduce
 struct wc_string {
@@ -97,15 +95,9 @@ class WordsMR : public MapReduceSort<WordsMR, wc_string, wc_word, uint64_t, hash
     uint64_t chunk_size;
     uint64_t splitter_pos;
 public:
-    explicit WordsMR(uint64_t _chunk_size) :
-        chunk_size(_chunk_size), splitter_pos(0) {}
-
-    void set_data(char* _data, uint64_t length)
-    {
-        data = _data;
-        data_size = length;
-        splitter_pos = 0;
-    }
+    explicit WordsMR(char* _data, uint64_t length, uint64_t _chunk_size) :
+        data(_data), data_size(length), chunk_size(_chunk_size), 
+            splitter_pos(0) {}
 
     void* locate(data_type* str, uint64_t len) const
     {
@@ -162,6 +154,7 @@ public:
         
         splitter_pos = end;
 
+        /* Return true since the out data is valid. */
         return 1;
     }
 
@@ -171,153 +164,195 @@ public:
     }
 };
 
-
-
-/**
- *  \fn         run_job
- *  \brief      The main engine that calls Phoenix init(), map(), and reduce() functions.
- *
- *  \param[in]  job         The parameters to the job.
- *  \param[in]  disp_num    The number of results to display.
- *
- *  \return     A 0 on success and a -1 on a failure.
- *
- *  This is different than the origianl Phoenix word count application because we allow
- *  the user to control the MapReduce functions. This allows us to call map() multiple 
- *  time so that we can read and map() data in chunks. This flexibility gives us the
- *  ability to run the read as a separate thread so that we don't remain idle while 
- *  waiting for the disk. 
- *
- *  Notes
- *      - removed mmap because we can't mmap part of a file
- *
- *  Design
- *      read chunk 
- *      while nread < total size
- *          save old data, old size
- *
- *          create pthread
- *          nread += read chunk
- *
- *          run mappers (old data, old size)
- *
- *      run mappers
- *
- * TODO: make the return value of read_chunk meaningful
- */
-int run_job(job_state *job, unsigned int disp_num) 
-{
-    chunk_t **start = NULL;                                     // Start of data chunk list; used for cleanup
-    chunk_t **chunks = NULL;
-    int nchunks = 0;
-    //struct timespec begin, end, total_begin, total_end;
-
-    //get_time (total_begin);
-    //get_time (begin);
-
-    printf("Wordcount: Running...\n");
-    printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
-    //print_time("Wordcount: initialize libraries", begin, end);
-
-
-    // Phoenix data structures
-    std::vector<WordsMR::keyval> result;    
-    WordsMR mapReduce(1024*1024);
-    chunks = (chunk_t **)calloc(NCHUNKS_MAX, 1);
-    nchunks = mapReduce.run_ingest_chunks(job, result, chunks, start);
-
-    // Print out the results
-    printf("Wordcount: MapReduce Completed\n");
-    //get_time (begin);
-    unsigned int dn = std::min(disp_num, (unsigned int)result.size());
-    uint64_t total = 0;
-    for(size_t i = 0; i < result.size(); i++)
-        total += result[i].val;
-
-    printf("\nWordcount: Results (TOP %d of %lu):\n", dn, result.size());
-    for (size_t i = 0; i < dn; i++)
-        printf("%15s - %lu\n", result[result.size()-1-i].key.data, result[result.size()-1-i].val);
-    printf("Total: %lu\n", total);
-
-    // Cleanup
-    for (int i = 0; i < nchunks; i++) {
-        free(chunks[i]->data);
-        free(chunks[i]);
-    }
-    free(chunks);
-
-    //if (job->hdfs != NULL) {
-    //    CHECK_ERROR( hdfsDisconnect(job->hdfs) < 0);
-    //}
-    //get_time(total_end);
-    //get_time(end);
-    //print_time("Wordcount: finalize", begin, end);
-    //print_time("Wordcount: total", total_begin, total_end);
-
-    return 0;
-}
-
 int main(int argc, char *argv[]) 
 {
-    debug_printf("Trying to figure out callbacks\n");
-
+    char * fdata = NULL;
     unsigned int disp_num;
-    char *disp_num_str = NULL;
+    struct stat finfo;
+    const char * fname, * disp_num_str;
+    struct timespec begin, end;
+    uint64_t input_size = 0;
+
+    get_time (begin);
+
     int c;
+    disp_num_str = "10";
 
-    job_state job = {NULL, "", -1, -1, 1};
-
-    while ((c = getopt(argc, argv, "n:i:qh")) != -1) {
+    // Parse command line options
+    while ((c = getopt(argc, argv, "n:dqh")) != -1) {
         switch(c) {
         case 'n':
             disp_num_str = optarg;
             break;
-        case 'i':
-            job.ingest_files = atoi(optarg);
-            break;
         case 'q':
-            job.hdfs = hdfsConnect("localhost", 54310);
-            CHECK_ERROR( job.hdfs == NULL);
+            hdfs_dir = true;
+            hdfs = hdfsConnect("localhost", 54310);
+            CHECK_ERROR( hdfs == NULL);
             break;
-        case 'h':
-            printf("Wordcount USAGE: %s [options] <NFILES> <PATH>\n\n", argv[0]);
-            printf("Description\n");
-            printf("\tNFILES   The number of total files to process\n");
-            printf("\tPATH     Path to the directory to process part-* files\n");
-            printf("Flags\n");
-            printf("\t-h  \t Print this help menu\n");
-            printf("\t-n i\t Display the top i results\n");
-            printf("\t-i i\t Ingest i files at a time in parallel with mapeprs\n");
-            printf("\t-q i\t Use an input HDFS directory at path i\n");
-            printf("\n");
-            printf("Examples:\n");
-            printf("\t%s -d 10 /data1/data/randomtextwriter/\n", argv[0]); 
-            printf("\t%s -n 20 /data1/data/randomtextwriter-input\n", argv[0]); 
-            printf("\n");
-            printf("*Note: you can no longer specify one file - you must give a\n");
-            printf("directory from which to read files part-*.\n");
-            exit(EXIT_SUCCESS);
-        default: 
-            fprintf(stderr, "Wordcount USAGE: %s [options] path\n", argv[0]); 
-            exit(EXIT_FAILURE);
+         case 'h':
+             printf("Wordcount USAGE: %s [options] path\n\n", argv[0]);
+             printf("Flags\n");
+             printf("\t-h  \t Print this help menu\n");
+             printf("\t-n i\t Display the top i results\n");
+             printf("\t-d i\t Use an input dir at path i (instead of a file)\n");
+             printf("\t-q i\t Use an input HDFS dir at path i\n");
+             printf("\t-w i\t Use local FS as tier between HFDS dir at path i\n");
+             printf("\n");
+             printf("Ex: %s -d 10 /data1/data/randomtextwriter/\n", argv[0]);
+             printf("Ex: %s -n 20 /data1/data/randomtextwriter-input\n", argv[0]);
+             exit(EXIT_SUCCESS);
+         default:
+             fprintf(stderr, "Wordcount USAGE: %s [options] path\n", argv[0]);
+             exit(EXIT_FAILURE);
         }
     }
 
     if (optind >= argc - 1) {
-        fprintf(stderr, "Expected argument(s) after options\n");
+        fprintf(stderr, "Expected argument after options\n");
         exit(EXIT_FAILURE);
     }
-    job.total_nfiles = atoi(argv[optind]);
-    strcpy(job.path, argv[optind + 1]);
+    total_nfiles = atoi(argv[optind]);
+    fname = argv[optind + 1];
 
+    printf("Wordcount: Running...\n");
+    
+    uint64_t r = 0;
+    char filename[LINE_MAX];
+    int nchunks = 0;
+    char nchunks_str[32];
+    uint64_t nread = 0;
+
+    // Get the size of the input
+    while (nchunks < total_nfiles) {
+        int fd = -1;
+        // Construct the filename
+        strcpy(filename, fname);
+        if (nchunks < 10)
+            strcat(filename, "/part-0000");
+        else if (nchunks < 100)
+            strcat(filename, "/part-000");
+        else if (nchunks < 1000)
+            strcat(filename, "/part-00");
+        else {
+            fprintf(stderr, "Error: too many files in the directory\n");
+            exit(EXIT_FAILURE);
+        }
+        sprintf(nchunks_str, "%d", nchunks);
+        strcat(filename, nchunks_str);
+
+        // Open the file and read it in
+        if (hdfs_dir) {
+            hdfsFileInfo *finfo = hdfsGetPathInfo(hdfs, filename);
+            CHECK_ERROR( finfo == NULL);
+            input_size += (uint64_t) finfo->mSize;
+        }
+        else {
+            CHECK_ERROR((fd = open(filename, O_RDONLY)) < 0);
+            CHECK_ERROR(fstat(fd, &finfo) < 0);
+            input_size += finfo.st_size;
+            CHECK_ERROR(close(fd) < 0);
+        }
+        nchunks++;
+    }
+
+    fdata = (char *)malloc(input_size + 1);
+    CHECK_ERROR (fdata == NULL);
+
+    nchunks = 0;
+    while (nchunks < total_nfiles) {
+        int fd = -1;
+        // Construct the filename
+        strcpy(filename, fname);
+        if (nchunks < 10)
+            strcat(filename, "/part-0000");
+        else if (nchunks < 100)
+            strcat(filename, "/part-000");
+        else if (nchunks < 1000)
+            strcat(filename, "/part-00");
+        else {
+            fprintf(stderr, "Error: too many files in the directory\n");
+            exit(EXIT_FAILURE);
+        }
+        sprintf(nchunks_str, "%d", nchunks);
+        strcat(filename, nchunks_str);
+
+        // Open the file and read it in
+        r = 0;
+        if (hdfs_dir) {
+            hdfsFile f = hdfsOpenFile(hdfs, filename, O_RDONLY, 0, 0, 0);
+            hdfsFileInfo *finfo = hdfsGetPathInfo(hdfs, filename);
+            CHECK_ERROR( f == NULL);
+            CHECK_ERROR( finfo == NULL);
+
+            while (r < (uint64_t) finfo->mSize) 
+                r += hdfsPread(hdfs, f, r, fdata + r + nread, finfo->mSize - r);
+
+            CHECK_ERROR(hdfsCloseFile(hdfs, f) < 0);
+        }
+        else {
+            CHECK_ERROR((fd = open(filename, O_RDONLY)) < 0);
+            CHECK_ERROR(fstat(fd, &finfo) < 0);
+            while (r < (uint64_t) finfo.st_size) 
+                r += pread (fd, fdata + r + nread, finfo.st_size, r);
+            CHECK_ERROR(close(fd) < 0);
+        }
+        
+        nread += r;
+        nchunks++;
+
+        printf("filename: %s\n", filename);
+        printf("nread: %lu\n", nread);
+    }
+   
     // Get the number of results to display
     CHECK_ERROR((disp_num = (disp_num_str == NULL) ? 
       DEFAULT_DISP_NUM : atoi(disp_num_str)) <= 0);
 
-    debug_printf("disp_num = %d; path = %s; nfiles = %lu; ingest_files = %lu\n", 
-      disp_num, job.path, job.total_nfiles, job.ingest_files);
+    get_time (end);
 
-    return run_job(&job, disp_num);
+#ifdef TIMING
+    print_time("initialize", begin, end);
+#endif
+
+    printf("Wordcount: Calling MapReduce Scheduler Wordcount\n");
+    get_time (begin);
+    std::vector<WordsMR::keyval> result;    
+
+    WordsMR mapReduce(fdata, input_size, 1024*1024);
+    CHECK_ERROR( mapReduce.run(result) < 0);
+    get_time (end);
+
+#ifdef TIMING
+    print_time("library", begin, end);
+#endif
+    printf("Wordcount: MapReduce Completed\n");
+
+    get_time (begin);
+
+    unsigned int dn = std::min(disp_num, (unsigned int)result.size());
+    printf("\nWordcount: Results (TOP %d of %lu):\n", dn, result.size());
+    uint64_t total = 0;
+    for (size_t i = 0; i < dn; i++)
+    {
+        printf("%15s - %lu\n", result[result.size()-1-i].key.data, result[result.size()-1-i].val);
+    }
+
+    for(size_t i = 0; i < result.size(); i++)
+    {
+        total += result[i].val;
+    }
+
+    printf("Total: %lu\n", total);
+
+    free (fdata);
+
+    get_time (end);
+
+#ifdef TIMING
+    print_time("finalize", begin, end);
+#endif
+
+    return 0;
 }
 
 // vim: ts=8 sw=4 sts=4 smarttab smartindent
