@@ -394,7 +394,12 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
     // Read the first chunk
     *chunks = (chunk_t *)malloc(sizeof(chunk_t));
     curr_chunk = initialize_chunk(*chunks, job, 0, 0, 0);
-    read_chunk(job, curr_chunk);
+    if (job->ingest_bytes > 0) {
+        read_chunk_bytes(job, curr_chunk);
+    }
+    else {
+        read_chunk(job, curr_chunk);
+    }
     nread += curr_chunk->size;
     nchunks++;
     *chunks++;

@@ -136,6 +136,51 @@ uint64_t get_fsize(job_state *job)
     return input_size;
 }
 
+int read_chunk_bytes(job_state *job, chunk_t *chunk)
+{
+    char filename[LINE_MAX] = "";
+    int fd = -1;
+    off_t fsize = -1;
+    
+    debug_printf("\t[read_chunk_bytes] reading from a directory (chunk->fileid = %lu)\n", chunk->fileid);
+    construct_filename(job, filename, chunk->fileid);
+
+    struct stat finfo;
+    CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
+    CHECK_ERROR( fstat(fd, &finfo) < 0);
+    fsize = finfo.st_size;
+
+    // Find split
+    char c = 'a'; 
+    off_t split = (off_t) job->ingest_bytes + chunk->nread;
+    if (split > fsize) {
+        split = fsize + 1;
+        chunk->fileid++;
+    }
+    else {
+        CHECK_ERROR( lseek(fd, split, SEEK_SET) < split);
+        while ( c != ' ' && c != '\n' && c != '\r' && c != '\0') {
+            CHECK_ERROR( read(fd, &c, 1) < 1);
+            debug_printf("\t[read_chunk_bytes] c = %c (split = %lu)\n", c, split); 
+            split++;
+        }
+    }
+    chunk->size = (uint64_t) split - chunk->nread - 1;
+    chunk->data = (char *)malloc(chunk->size + 1);
+    debug_printf("\t[read_chunk_bytes] reading file %s (%lu bytes), mallocd %lu bytes\n", filename, fsize, chunk->size);
+
+    uint64_t r = 0;
+    debug_printf("\t[read_chunk_bytes] chunk->nread = %lu\n", chunk->nread);
+    while (r < (uint64_t) chunk->size) {
+        r += pread(fd, chunk->data + r, chunk->size, chunk->nread + r);
+    }
+    chunk->nread = chunk->nread + r;
+    debug_printf("\t[read_chunk_bytes] read chunk: (nread = %lu)\n---\n%s\n---\n", chunk->nread, chunk->data);
+ 
+    CHECK_ERROR( close(fd) < 0);
+    return 0;
+}
+
 
 /**
  * \fn          read_chunk
@@ -239,7 +284,12 @@ void *pthread_read( void *args)
     chunk_t *chunk = (chunk_t *) args;
 
     debug_printf("\t[pthread_read] thread instructed to read\n");
-    read_chunk(chunk->job, chunk);
+    if (chunk->job->ingest_bytes > 0) {
+        read_chunk_bytes(chunk->job, chunk);
+    }
+    else {
+        read_chunk(chunk->job, chunk);
+    }
     debug_printf("\t[pthread_read] thread read %lu bytes\n", chunk->size);
 
     return (void *) chunk->size;

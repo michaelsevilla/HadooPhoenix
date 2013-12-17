@@ -188,12 +188,6 @@ public:
 		// Out data is valid
 		return 1;
 	}
-
-	//bool sort(keyval const& a, keyval const& b) const {
-        //        return true;
-	////	return a.val < b.val || (a.val == b.val && strcmp(a.key.key, b.key.key) > 0);
-	//}
-
 };
 
 int main(int argc, char *argv[]) {
@@ -243,11 +237,10 @@ int main(int argc, char *argv[]) {
 	// Read into the malloc'd space
 	printf("Sort: Mallocing the file\n");
 	CHECK_ERROR( (fdata =  (char *) malloc(finfo.st_size + 1)) == NULL);
-        r = read(fd, fdata, finfo.st_size);
-	//while (r < (uint64_t) finfo.st_size)
-	//	r += pread (fd, fdata + r, finfo.st_size, r);
+	while (r < (uint64_t) finfo.st_size)
+		r += pread (fd, fdata + r, finfo.st_size, r);
 	printf("read: %lu bytes\n", r);
-	//CHECK_ERROR( r != (uint64_t) finfo.st_size);
+	CHECK_ERROR( r != (uint64_t) finfo.st_size);
 #endif
 
 
@@ -282,21 +275,7 @@ int main(int argc, char *argv[]) {
         for (uint64_t i = 0; i < dn && i < result.size(); i++) {
             printf("\t%s - %s\n", result[i].key.key, result[i].key.value);
         }
-        //uint64_t printed = 0;
-	//for (uint64_t i = 0; printed < dn; i++) { 
-	//	char curr_key[LINE_MAX], curr_value[LINE_MAX];
-	//	if (i >= result.size()) 
-	//		break;
-	//	CHECK_ERROR( strcpy(curr_key, result[result.size() - 1 - i].key.key) < 0);
-	//	CHECK_ERROR( strcpy(curr_value, result[result.size() - 1 - i].key.value) < 0);
-	//	if (strcmp(prev, curr_key)) {
-	//		CHECK_ERROR( strcpy(prev, curr_key) < 0);
-	//		//printf("\t%lu: %s\n", i, curr_word);
-	//		printf("\t%s - %s\n", curr_key, curr_value);
-	//		printed++;
-	//	}
 
-	//}
 	printf("Total: %lu\n", result.size());
 	get_time(end);
 	get_time(total_end);

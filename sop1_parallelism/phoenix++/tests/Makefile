@@ -34,7 +34,8 @@ include $(HOME)/Defines.mk
 .PHONY: default all clean
 
 APPS := \
-	word_count
+	word_count \
+	sort
         #histogram \
         #linear_regression \
         #kmeans \
@@ -42,7 +43,6 @@ APPS := \
 	#pca \
 	#string_match \
         #word_count \
-	#sort \
 
 default: all
 
