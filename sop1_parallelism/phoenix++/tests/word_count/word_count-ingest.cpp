@@ -235,8 +235,6 @@ void run_job(job_state *job, unsigned int disp_num)
 
 int main(int argc, char *argv[]) 
 {
-    debug_printf("Trying to figure out callbacks\n");
-
     unsigned int disp_num;
     char *disp_num_str = NULL;
     int c;

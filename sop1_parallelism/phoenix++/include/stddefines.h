@@ -119,7 +119,7 @@ static inline double time_elapsed(timespec const& begin)
 static inline void print_time (char const* prompt, timespec const& begin, timespec const& end)
 {
 #ifdef TIMING
-    printf("%s : %.3f\n", prompt, time_diff(end, begin));
+        printf("%s : %.3f\n", prompt, time_diff(end, begin));
 #endif
 }
 

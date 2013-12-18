@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-//#define DEBUG
+#define DEBUG
 
 #define NCHUNKS_MAX         10000
 #define DEFAULT_DISP_NUM    10
@@ -16,7 +16,7 @@ struct job_state {
     uint64_t total_size;        // The size of the whole
     int total_nfiles;           // The total number of files to read
     int ingest_files;           // The number of files to ingest at one time
-    uint64_t ingest_bytes;      // The number of bytes to ingest at one time
+    unsigned int ingest_lines;  // The number of lines to ingest at one time
 };
 
 // a single ingest chunk
@@ -128,6 +128,7 @@ uint64_t get_fsize(job_state *job)
             CHECK_ERROR((fd = open(filename, O_RDONLY)) < 0);
             CHECK_ERROR(fstat(fd, &finfo) < 0);
             input_size += finfo.st_size;
+            job->ingest_nlines = (unsigned int) finfo.st_size / 100.0; 
             CHECK_ERROR(close(fd) < 0);
         }
     }
@@ -141,14 +142,17 @@ int read_chunk_bytes(job_state *job, chunk_t *chunk)
     char filename[LINE_MAX] = "";
     int fd = -1;
     off_t fsize = -1;
+    unsigned int nlines = 0;
+    unsigned int total_nlines = 0;
     
     debug_printf("\t[read_chunk_bytes] reading from a directory (chunk->fileid = %lu)\n", chunk->fileid);
     construct_filename(job, filename, chunk->fileid);
-
-    struct stat finfo;
     CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
-    CHECK_ERROR( fstat(fd, &finfo) < 0);
-    fsize = finfo.st_size;
+
+    while (nlines < job->ingest_lines && nlines < job->ingest_nlines) {
+        
+        nlines++;
+    }
 
     // Find split
     char c = 'a'; 
@@ -159,7 +163,8 @@ int read_chunk_bytes(job_state *job, chunk_t *chunk)
     }
     else {
         CHECK_ERROR( lseek(fd, split, SEEK_SET) < split);
-        while ( c != ' ' && c != '\n' && c != '\r' && c != '\0') {
+        //while ( c != ' ' && c != '\n' && c != '\r' && c != '\0') {
+        while ( c != '\n' ) {
             CHECK_ERROR( read(fd, &c, 1) < 1);
             debug_printf("\t[read_chunk_bytes] c = %c (split = %lu)\n", c, split); 
             split++;
@@ -233,7 +238,7 @@ int read_chunk(job_state *job, chunk_t *chunk)
         }
 
         tmp = chunk->data;
-        chunk->data = (char *)realloc(chunk->data, size + fsize);
+        chunk->data = (char *)realloc(chunk->data, size + fsize + 1);
         if (chunk->data == NULL) {
             free(tmp);   
             fprintf(stderr, "ERROR: can't reallocate memory\n");
