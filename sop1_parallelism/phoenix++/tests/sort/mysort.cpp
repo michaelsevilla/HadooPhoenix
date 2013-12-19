@@ -273,7 +273,10 @@ int main(int argc, char *argv[]) {
 	CHECK_ERROR( strcpy(prev, "") < 0);
         // What the fuck are you doing? The keyes are unique
         for (uint64_t i = 0; i < dn && i < result.size(); i++) {
-            printf("\t%s - %s\n", result[i].key.key, result[i].key.value);
+            if (strlen(result[i].key.key) == 0)
+                dn++;
+            else
+                printf("\t%s - %s\n", result[i].key.key, result[i].key.value);
         }
 
 	printf("Total: %lu\n", result.size());
