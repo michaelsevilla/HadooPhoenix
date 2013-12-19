@@ -140,10 +140,16 @@ int read_chunk_bytes(job_state *job, chunk_t *chunk)
 {
     char filename[LINE_MAX] = "";
     int fd = -1;
+    hdfsFile hdfsF = NULL;
     
     debug_printf("\t[read_chunk_bytes] reading from a directory (chunk->fileid = %lu)\n", chunk->fileid);
     construct_filename(job, filename, chunk->fileid);
-    CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
+    if (job->hdfs != NULL) {
+        CHECK_ERROR( (hdfsF = hdfsOpenFile(job->hdfs, filename, O_RDONLY, 0, 0, 0)) == NULL);
+    }
+    else {
+        CHECK_ERROR( (fd = open(filename, O_RDONLY)) < 0);
+    }
 
     // Find split
     char c = 'a'; 
@@ -153,10 +159,21 @@ int read_chunk_bytes(job_state *job, chunk_t *chunk)
         chunk->fileid++;
     }
     else {
-        CHECK_ERROR( lseek(fd, split, SEEK_SET) < split);
+        if (job->hdfs != NULL) {
+            CHECK_ERROR( hdfsSeek(job->hdfs, hdfsF, split) < 0);
+        }
+        else {
+            CHECK_ERROR( lseek(fd, split, SEEK_SET) < split);
+        }
+
         //while ( c != ' ' && c != '\n' && c != '\r' && c != '\0') {
         while ( c != '\n' ) {
-            CHECK_ERROR( read(fd, &c, 1) < 1);
+            if (job->hdfs != NULL) {
+                CHECK_ERROR( hdfsRead(job->hdfs, hdfsF, &c, 1) < 1);
+            }
+            else {
+                CHECK_ERROR( read(fd, &c, 1) < 1);  
+            }
             if ( c == '\n' )
                 debug_printf("\t[read_chunk_bytes] c = %s (split = %lu)\n", "newline", split);
             else if ( c == '\r' )
@@ -174,12 +191,22 @@ int read_chunk_bytes(job_state *job, chunk_t *chunk)
     uint64_t r = 0;
     debug_printf("\t[read_chunk_bytes] chunk->nread = %lu\n", chunk->nread);
     while (r < (uint64_t) chunk->size) {
-        r += pread(fd, chunk->data + r, chunk->size, chunk->nread + r);
+        if (job->hdfs != NULL) {
+            r += hdfsPread(job->hdfs, hdfsF, chunk->nread + r, chunk->data + r, chunk->size);    
+        }
+        else {
+            r += pread(fd, chunk->data + r, chunk->size, chunk->nread + r);
+        }
     }
     chunk->nread = chunk->nread + r;
     debug_printf("\t[read_chunk_bytes] read chunk: (nread = %lu)\n---\n%s\n---\n", chunk->nread, chunk->data);
- 
-    CHECK_ERROR( close(fd) < 0);
+
+    if (job->hdfs != NULL) { 
+        CHECK_ERROR( hdfsCloseFile(job->hdfs, hdfsF) < 0);
+    }
+    else {
+        CHECK_ERROR( close(fd) < 0);
+    }
     return 0;
 }
 

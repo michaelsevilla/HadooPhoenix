@@ -401,8 +401,7 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
         read_chunk(job, curr_chunk);
     }
     nread += curr_chunk->size;
-    nchunks++;
-    *chunks++;
+    nchunks++; *chunks++;
 
     printf("nread (chunk %i) = %lu\n", nchunks, nread);
     debug_printf("[run_ingest_chunks] curr_chunk stats \n\tid = %d, size = %lu, size = %lu, nread = %lu\n%s\n\n", 
@@ -429,8 +428,7 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
 
         // Cleanup and prepare for next iteration
         nread += (uint64_t) ret;
-        nchunks++;
-        *chunks++;
+        nchunks++; *chunks++;
 
         printf("nread (chunk %i) = %lu\n", nchunks, nread);
     }
