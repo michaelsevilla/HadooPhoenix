@@ -191,7 +191,6 @@ void run_job(job_state *job, unsigned int disp_num)
     chunk_t **start = NULL;                                     // Start of data chunk list; used for cleanup
     chunk_t **chunks = NULL;
     int nchunks = 0;
-    uint64_t total = 0;
     unsigned int dn = 0;
     struct timespec begin, end, total_begin, total_end;
 
@@ -212,12 +211,10 @@ void run_job(job_state *job, unsigned int disp_num)
     printf("Wordcount: MapReduce Completed\n");
     get_time(begin);
     dn = std::min(disp_num, (unsigned int)result.size());
-    for(size_t i = 0; i < result.size(); i++)
-        total += result[i].val;
     printf("\nWordcount: Results (TOP %d of %lu):\n", dn, result.size());
     for (size_t i = 0; i < dn; i++)
         printf("%15s - %lu\n", result[result.size()-1-i].key.data, result[result.size()-1-i].val);
-    printf("Total: %lu\n", total);
+    printf("Total: %lu\n", result.size());
 
     for (int i = 0; i < nchunks; i++) {
         free(chunks[i]->data);
@@ -264,13 +261,13 @@ int main(int argc, char *argv[])
             printf("Flags\n");
             printf("\t-h  \t Print this help menu\n");
             printf("\t-n i\t Display the top i results\n");
-            printf("\t-b i\t Ingest i bytes at a time in parallel with mapeprs\n");
-            printf("\t-i i\t Ingest i files at a time in parallel with mapeprs\n");
-            printf("\t-q i\t Use an input HDFS directory at path i\n");
+            printf("\t-b i\t Ingest i bytes at a time in parallel with mappers\n");
+            printf("\t-i i\t Ingest i files at a time in parallel with mappers\n");
+            printf("\t-q  \t Use an input HDFS directory\n");
             printf("\n");
             printf("Examples:\n");
-            printf("\t%s -d 10 /data1/data/randomtextwriter/\n", argv[0]); 
-            printf("\t%s -n 20 /data1/data/randomtextwriter-input\n", argv[0]); 
+            printf("\t%s -i 10 /data1/data/randomtextwriter/\n", argv[0]); 
+            printf("\t%s -b 1048576 /data1/data/randomtextwriter-input\n", argv[0]); 
             printf("\n");
             printf("*Note: you can no longer specify one file - you must give a\n");
             printf("directory from which to read files part-*.\n");

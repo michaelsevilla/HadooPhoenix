@@ -235,7 +235,6 @@ void run_job(job_state *job, unsigned int disp_num)
     get_time(end); get_time(total_end);
     print_time("finalize", begin, end);
     print_time("total", total_begin, total_end);
-
 }
 
 int main(int argc, char *argv[]) 
@@ -266,12 +265,12 @@ int main(int argc, char *argv[])
             printf("Flags\n");
             printf("\t-h  \t Print this help menu\n");
             printf("\t-n i\t Display the top i results\n");
-            printf("\t-b i\t Ingest i bytes at a time in parallel with mapeprs\n");
-            printf("\t-q i\t Use an input HDFS directory at path i\n");
+            printf("\t-b i\t Ingest i bytes at a time in parallel with mappiers\n");
+            printf("\t-q  \t Use an input HDFS directory\n");
             printf("\n");
             printf("Examples:\n");
-            printf("\t%s -d 10 /data1/data/randomtextwriter/\n", argv[0]); 
-            printf("\t%s -n 20 /data1/data/randomtextwriter-input\n", argv[0]); 
+            printf("\t%s -b 1048576 /data1/data/randomtextwriter/\n", argv[0]); 
+            printf("\t%s -i 10 /data1/data/randomtextwriter-input\n", argv[0]); 
             printf("\n");
             printf("*Note: you can no longer specify one file - you must give a\n");
             printf("directory from which to read files part-*.\n");
