@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<property>
+  <name>dfs.replication</name>
+  <value>3</value>
+</property>
+
+<property>
+  <name>dfs.data.dir</name>
+  <value>/mnt/vol2/msevilla/data,/mnt/vol3/msevilla/data</value>
+</property>
+
+<property>
+  <name>dfs.name.dir</name>
+  <value>/mnt/vol1/msevilla/name</value>
+</property>
+
+<property>
+  <name>dfs.block.size</name>
+  <value>268435456</value>
+  <description>The default block size for new files.</description>
+</property>
+
+</configuration>

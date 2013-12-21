@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<property>
+  <name>mapred.job.tracker</name>
+  <value>192.168.141.136:54311</value>
+</property>
+
+<property>
+  <name>mapred.output.compress</name>
+  <value>true</value>
+  <description>Should the job outputs be compressed?
+  </description>
+</property>
+
+<property>
+  <name>mapred.compress.map.output</name>
+  <value>true</value>
+  <description>Should the outputs of the maps be compressed before being
+               sent across the network. Uses SequenceFile compression.
+  </description>
+</property>
+
+<property>
+  <name>mapred.reduce.parallel.copies</name>
+  <value>20</value>
+  <description>The default number of parallel transfers run by reduce
+  during the copy(shuffle) phase.
+  </description>
+</property>
+
+
+
+
+</configuration>

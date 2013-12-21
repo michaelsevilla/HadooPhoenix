@@ -183,7 +183,8 @@ int main(int argc, char *argv[])
             break;
         case 'q':
             hdfs_dir = true;
-            hdfs = hdfsConnect("localhost", 54310);
+            //hdfs = hdfsConnect("localhost", 54310);
+            hdfs = hdfsConnect("issdm-36", 54310);
             CHECK_ERROR( hdfs == NULL);
             break;
          case 'h':

@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+
+<property>
+  <name>hadoop.tmp.dir</name>
+  <value>/mnt/vol1/msevilla/hadoop/tmp</value>
+  <description>A base for other temporary directories.</description>
+</property>
+
+<property>
+  <name>fs.default.name</name>
+  <value>hdfs://192.168.141.136:54310</value>
+  <description>The name of the default file system.</description>
+</property>
+
+<property>
+  <name>fs.inmemory.size.mb</name>
+  <value>200</value>
+  <description>Larger amount of memory allocated for the in-memory
+ file system used to merge map-outputs at the reduces.</description>
+</property>
+
+</configuration>

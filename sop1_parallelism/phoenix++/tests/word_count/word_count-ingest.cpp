@@ -250,7 +250,7 @@ int main(int argc, char *argv[])
             job.ingest_files = atoi(optarg);
             break;
         case 'q':
-            job.hdfs = hdfsConnect("localhost", 54310);
+            job.hdfs = hdfsConnect("issdm-36", 54310);
             CHECK_ERROR( job.hdfs == NULL);
             break;
         case 'h':

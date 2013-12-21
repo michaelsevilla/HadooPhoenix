@@ -386,6 +386,7 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
     struct timespec begin, end;
 
     // Chunk data structures
+    get_time(begin);
     job->total_size = get_fsize(job);
     debug_printf("[run_ingest_chunks] total size = %lu\n", job->total_size);
     this->first = true;
@@ -438,13 +439,13 @@ run_ingest_chunks(job_state *job, std::vector<keyval>& result,
     this->run_mappers(result);
 
     get_time (end);
-    print_time("Wordcount: mappers", begin, end);
+    print_time("mappers", begin, end);
 
     debug_printf("[run_ingest_chunks] all mappers done, start reducers\n");
     get_time (begin);
     this->run_reducers(result);
     get_time (end);
-    print_time("Wordcount: reducers", begin, end);
+    print_time("reducers", begin, end);
 
     return nchunks;
 }

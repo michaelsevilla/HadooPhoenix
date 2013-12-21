@@ -14,5 +14,6 @@ Files
 - ./run_sort.sh:          executes the sort benchmark (Sort.java)
 - ./run_terasort.sh:      executes the terasort benchmark (terasort/TeraSort.java)
 - ./run_wordcount.sh:     executes the word count benchmark (WordCount.java)
+- ./conf/                 the Hadoop configuration files  
 
 End file
